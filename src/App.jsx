@@ -223,7 +223,7 @@ const TriangleLegend = ({ isDarkMode, mode }) => {
         ctx.font = 'bold 14px sans-serif';
         ctx.textAlign = 'center';
 
-        ctx.fillStyle = '#ffa500'; // 3rd party
+        ctx.fillStyle = '#10b981'; // 3rd party (Emerald)
         ctx.fillText('3', p0.x, p0.y - 7);
 
         ctx.fillStyle = '#ff0000'; // Republican
@@ -257,7 +257,7 @@ const YEARS = [
 const PARTIES = {
     DEM: { name: 'Democrat', color: '#0000ff', darkColor: '#00008b' }, // Pure Blue
     REP: { name: 'Republican', color: '#ff0000', darkColor: '#8b0000' }, // Pure Red
-    THIRD: { name: 'Third Party', color: '#ffa500', darkColor: '#ff8c00' } // Orange
+    THIRD: { name: 'Third Party', color: '#10b981', darkColor: '#059669' } // Green (Emerald)
 };
 
 /**
@@ -373,8 +373,7 @@ export default function ElectionVisualizer() {
     const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
 
 
-    const [cacheProgress, setCacheProgress] = useState({ count: 0, total: YEARS.length });
-    const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
+    const [cacheProgress, setCacheProgress] = useState({ count: 1, total: YEARS.length });
     const [electionData, setElectionData] = useState({});
 
     const mapRef = useRef(null);
@@ -553,7 +552,7 @@ export default function ElectionVisualizer() {
         if (isPlaying && Object.keys(electionData).length > 0) {
             const loop = () => {
                 setYear(prev => {
-                    const next = prev + (0.05 * playbackSpeed); // Modified speed
+                    const next = prev + 0.1; // 2x speed
                     if (next > YEARS[YEARS.length - 1]) return YEARS[0]; // Infinite Loop
                     return next;
                 });
@@ -570,7 +569,7 @@ export default function ElectionVisualizer() {
             });
         }
         return () => cancelAnimationFrame(animationId);
-    }, [isPlaying, electionData, playbackSpeed]); // Added playbackSpeed dependency
+    }, [isPlaying, electionData]);
 
     // Dimensions
     const width = 960;
@@ -947,16 +946,38 @@ export default function ElectionVisualizer() {
         e.target.releasePointerCapture(e.pointerId);
     };
 
+    // Optimization: Use ref for viewState to avoid re-creating handleMouseMove on every frame
+    const viewStateRef = useRef(viewState);
+    useEffect(() => { viewStateRef.current = viewState; }, [viewState]);
+
     const handleMouseMove = useCallback((e, feature) => {
-        if (!electionData) return;
-        setTooltipPos({
-            x: e.clientX + 20,
-            y: e.clientY - 20
-        });
-        setHovered({
-            id: feature.id,
-            name: feature.properties.name || `County ${feature.id}`
-        });
+        if (!electionData || !svgRef.current) return;
+
+        const svg = svgRef.current;
+        let pt = svg.createSVGPoint();
+        pt.x = e.clientX;
+        pt.y = e.clientY;
+
+        // 1. Screen Pixels -> SVG User Space (viewBox units)
+        // using inverse CTM to handle scaling/letterboxing
+        try {
+            const svgP = pt.matrixTransform(svg.getScreenCTM().inverse());
+
+            // 2. SVG User Space -> Map Space (undo pan/zoom)
+            const vs = viewStateRef.current;
+            const mx = (svgP.x - vs.x) / vs.k;
+            const my = (svgP.y - vs.y) / vs.k;
+
+            setHovered({
+                id: feature.id,
+                name: feature.properties.name || `County ${feature.id}`,
+                mx,
+                my
+            });
+        } catch (err) {
+            // CTM might not be ready
+            return;
+        }
     }, [electionData]);
 
     // Touch / Pinch-to-Zoom Handlers
@@ -1300,7 +1321,7 @@ export default function ElectionVisualizer() {
             </div>
 
             {/* 5. Timeline Overlay */}
-            <div className="absolute bottom-4 md:bottom-8 left-0 right-0 z-10 px-2 md:px-4 flex justify-center pointer-events-none">
+            <div className="absolute bottom-12 md:bottom-8 left-0 right-0 z-10 px-2 md:px-4 flex justify-center pointer-events-none">
                 <div className="w-full max-w-4xl flex flex-col gap-3 pointer-events-auto">
                     <div className="flex items-center gap-4">
                         <div className="flex flex-col items-center gap-1">
@@ -1311,19 +1332,7 @@ export default function ElectionVisualizer() {
                             >
                                 {isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" className="ml-0.5" />}
                             </button>
-                            {/* Speed Slider */}
-                            <div className="flex flex-col items-center w-16">
-                                <input
-                                    type="range"
-                                    min="0.5"
-                                    max="4"
-                                    step="0.1"
-                                    value={playbackSpeed}
-                                    onChange={(e) => setPlaybackSpeed(parseFloat(e.target.value))}
-                                    className={`w-12 h-1 rounded-lg appearance-none cursor-pointer ${isDarkMode ? 'bg-slate-700 accent-blue-400' : 'bg-slate-300 accent-slate-800'}`}
-                                />
-                                <span className={`text-[9px] font-mono mt-0.5 ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>{playbackSpeed}x</span>
-                            </div>
+
                         </div>
 
                         <button
@@ -1384,13 +1393,54 @@ export default function ElectionVisualizer() {
             {/* Floating Tooltip */}
             {hovered && (() => {
                 const hoveredData = getInterpolatedData(hovered.id, year);
+                const svg = svgRef.current;
+
+                if (!hoveredData || !svg) return null;
+
+                // 1. Map Space -> SVG User Space (apply pan/zoom)
+                const svgX = hovered.mx * viewState.k + viewState.x;
+                const svgY = hovered.my * viewState.k + viewState.y;
+
+                // 2. SVG User Space -> Screen Pixels
+                let screenX, screenY;
+                try {
+                    let pt = svg.createSVGPoint();
+                    pt.x = svgX;
+                    pt.y = svgY;
+                    const screenP = pt.matrixTransform(svg.getScreenCTM());
+                    screenX = screenP.x;
+                    screenY = screenP.y;
+                } catch (err) {
+                    return null;
+                }
+
+                // Smart Positioning logic
+                const tooltipWidth = 240; // Approx max width
+                const tooltipHeight = 300; // Approx max height
+                const margin = 20;
+
+                // Default: Bottom-Right
+                let left = screenX + margin;
+                let top = screenY + margin; // Start below cursor
+
+                // Check Right Edge -> Flip to Left
+                if (left + tooltipWidth > window.innerWidth) {
+                    left = screenX - tooltipWidth - margin;
+                }
+
+                // Check Bottom Edge -> Flip to Top
+                if (top + tooltipHeight > window.innerHeight) {
+                    top = screenY - tooltipHeight - margin;
+                    if (top < 0) top = 10;
+                }
+
                 return (
                     <div
                         className={`absolute z-50 pointer-events-none backdrop-blur shadow-2xl rounded-xl p-4 text-sm border w-56 transition-colors ${isDarkMode
                             ? 'bg-slate-900/95 border-slate-700 text-slate-200'
                             : 'bg-white/95 border-slate-100 text-slate-800'
                             }`}
-                        style={{ left: tooltipPos.x, top: tooltipPos.y }}
+                        style={{ left: left, top: top }}
                     >
                         <div className={`font-bold mb-3 pb-2 border-b flex justify-between items-center ${isDarkMode ? 'border-slate-700 text-slate-100' : 'border-slate-100 text-slate-800'}`}>
                             <span>{hovered.name}</span>
@@ -1421,12 +1471,12 @@ export default function ElectionVisualizer() {
                                 {/* Third Party Votes */}
                                 {hoveredData.thirdVotes > 0 && (
                                     <div>
-                                        <div className="flex justify-between items-center text-xs font-bold text-orange-500 mb-1">
+                                        <div className="flex justify-between items-center text-xs font-bold text-emerald-500 mb-1">
                                             <span>Third Party</span>
                                             <span>{((hoveredData.thirdVotes / (hoveredData.demVotes + hoveredData.repVotes + hoveredData.thirdVotes)) * 100).toFixed(1)}%</span>
                                         </div>
                                         <div className={`w-full h-2 rounded-full overflow-hidden ${isDarkMode ? 'bg-slate-800' : 'bg-slate-100'}`}>
-                                            <div className="h-full bg-orange-500" style={{ width: `${(hoveredData.thirdVotes / (hoveredData.demVotes + hoveredData.repVotes + hoveredData.thirdVotes)) * 100}%` }}></div>
+                                            <div className="h-full bg-emerald-500" style={{ width: `${(hoveredData.thirdVotes / (hoveredData.demVotes + hoveredData.repVotes + hoveredData.thirdVotes)) * 100}%` }}></div>
                                         </div>
                                         {/* Show up to 2 third-party candidates */}
                                         {(hoveredData.thirdParty1 || hoveredData.thirdParty2) && (
@@ -1499,25 +1549,28 @@ export default function ElectionVisualizer() {
                         )}
                     </div>
                 );
-            })()}
+            })()
+            }
 
             {/* Blocking Cache Generation Overlay */}
-            {cacheProgress.count < cacheProgress.total && (
-                <div className="absolute inset-0 z-[100] bg-slate-900/80 backdrop-blur-sm flex flex-col items-center justify-center text-white pointer-events-auto cursor-wait">
-                    <div className="bg-slate-800 p-8 rounded-2xl shadow-2xl border border-slate-700 max-w-md w-full text-center">
-                        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-6"></div>
-                        <h2 className="text-xl font-bold mb-2">Generating Cache</h2>
-                        <p className="text-slate-400 text-sm mb-6">Optimizing complex geometry for smooth interactions...</p>
+            {
+                cacheProgress.count < cacheProgress.total && (
+                    <div className="absolute inset-0 z-[100] bg-slate-900/80 backdrop-blur-sm flex flex-col items-center justify-center text-white pointer-events-auto cursor-wait">
+                        <div className="bg-slate-800 p-8 rounded-2xl shadow-2xl border border-slate-700 max-w-md w-full text-center">
+                            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-6"></div>
+                            <h2 className="text-xl font-bold mb-2">Generating Cache</h2>
+                            <p className="text-slate-400 text-sm mb-6">Optimizing complex geometry for smooth interactions...</p>
 
-                        <div className="text-4xl font-bold text-blue-400 mb-2">
-                            {Math.round((cacheProgress.count / cacheProgress.total) * 100)}%
-                        </div>
-                        <div className="text-xs text-slate-500 font-mono">
-                            {cacheProgress.count} / {cacheProgress.total} elections
+                            <div className="text-4xl font-bold text-blue-400 mb-2">
+                                {Math.round((cacheProgress.count / cacheProgress.total) * 100)}%
+                            </div>
+                            <div className="text-xs text-slate-500 font-mono">
+                                {cacheProgress.count} / {cacheProgress.total} elections
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
-        </div>
+                )
+            }
+        </div >
     );
 }
