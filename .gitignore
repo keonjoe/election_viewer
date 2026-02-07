@@ -11,3 +11,5 @@ dist-ssr
 .env.local
 .env.*.local
 /2000-2024
+.DS_Store
+.DS_Store

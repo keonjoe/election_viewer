@@ -1065,7 +1065,7 @@ export default function ElectionVisualizer() {
                         <h1 className={`text-2xl font-bold tracking-tight leading-tight drop-shadow-sm ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
                             U.S. Election History
                         </h1>
-                        <a href="https://github.com/keonjoe/not_as_divided" target="_blank" rel="noopener noreferrer" className={`transition-colors ${isDarkMode ? 'text-slate-400 hover:text-blue-400' : 'text-slate-500 hover:text-blue-600'}`}>
+                        <a href="https://github.com/keonjoe/election_viewer/" target="_blank" rel="noopener noreferrer" className={`transition-colors ${isDarkMode ? 'text-slate-400 hover:text-blue-400' : 'text-slate-500 hover:text-blue-600'}`}>
                             <Github size={18} />
                         </a>
                     </div>
