@@ -965,62 +965,58 @@ export default function ElectionVisualizer() {
             const t1 = e.touches[0];
             const t2 = e.touches[1];
             const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
-            touchRef.current.dist = dist;
+            const cx = (t1.clientX + t2.clientX) / 2;
+            const cy = (t1.clientY + t2.clientY) / 2;
+
+            touchRef.current = {
+                mode: 'pinch',
+                startDist: dist,
+                startCx: cx,
+                startCy: cy,
+                startK: viewState.k,
+                startX: viewState.x,
+                startY: viewState.y
+            };
+
+            // Disable dragging if pinch starts
+            setIsDragging(false);
         }
     };
 
     const handleTouchMove = (e) => {
-        if (e.touches.length === 2 && touchRef.current.dist) {
-            // e.preventDefault(); // handled by style touch-action: none
+        if (e.touches.length === 2 && touchRef.current.mode === 'pinch') {
+            e.preventDefault(); // Prevent browser zoom and pointer events
+
             const t1 = e.touches[0];
             const t2 = e.touches[1];
             const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
-
-            // Dampen the zoom speed slightly for stability
-            const scaleChange = dist / touchRef.current.dist;
-
             const cx = (t1.clientX + t2.clientX) / 2;
             const cy = (t1.clientY + t2.clientY) / 2;
 
-            const svg = svgRef.current;
-            if (!svg) return;
+            const { startDist, startCx, startCy, startK, startX, startY } = touchRef.current;
 
-            // Convert center to SVG coords
-            let offsetX, offsetY;
-            try {
-                const pt = svg.createSVGPoint();
-                pt.x = cx;
-                pt.y = cy;
-                const cursorPoint = pt.matrixTransform(svg.getScreenCTM().inverse());
-                offsetX = cursorPoint.x;
-                offsetY = cursorPoint.y;
-            } catch (err) {
-                return;
-            }
+            // Calculate new scale
+            const scale = dist / startDist;
+            const newK = Math.min(3.75, Math.max(0.5, startK * scale));
 
-            setViewState(prev => {
-                // Limit zoom per frame to avoid jumping
-                // Apply a small smoothing factor if needed, but direct ratio is usually fine for pinch
-                const rawNewK = prev.k * scaleChange;
-                const newK = Math.min(3.75, Math.max(0.5, rawNewK));
+            // Calculate effective scale ratio relative to start
+            const effectiveScaleRatio = newK / startK;
 
-                // If barely changed, skip
-                // if (Math.abs(newK - prev.k) < 0.001) return prev;
+            // Calculate new translation to keep the point under the centroid fixed relative to the map
+            // New position = CurrentCentroid - (StartCentroid - StartPos) * Ratio
+            const newX = cx - (startCx - startX) * effectiveScaleRatio;
+            const newY = cy - (startCy - startY) * effectiveScaleRatio;
 
-                const kRatio = newK / prev.k;
-                return {
-                    k: newK,
-                    x: offsetX - (offsetX - prev.x) * kRatio,
-                    y: offsetY - (offsetY - prev.y) * kRatio
-                };
+            setViewState({
+                k: newK,
+                x: newX,
+                y: newY
             });
-
-            touchRef.current.dist = dist;
         }
     };
 
     const handleTouchEnd = () => {
-        touchRef.current.dist = null;
+        touchRef.current = { mode: null };
     };
 
     // Optimization: Memoize map content to avoid re-renders on hover
@@ -1203,7 +1199,7 @@ export default function ElectionVisualizer() {
             </div>
 
             {/* 4. Controls & Legend */}
-            <div className="absolute z-10 pointer-events-none flex flex-row md:flex-col items-end gap-2 bottom-32 left-4 right-16 md:bottom-auto md:left-auto md:top-6 md:right-6 origin-bottom-left md:origin-top-right scale-90 md:scale-100 overflow-x-auto md:overflow-visible pr-2 md:pr-0 scrollbar-hide">
+            <div className="absolute z-10 pointer-events-none flex flex-row md:flex-col items-end gap-2 bottom-32 left-4 right-4 md:bottom-auto md:left-auto md:top-6 md:right-6 origin-bottom-left md:origin-top-right scale-90 md:scale-100 overflow-x-auto md:overflow-visible pr-2 md:pr-0 scrollbar-hide">
                 {/* Legend */}
                 <div className={`flex items-center gap-3 text-xs pointer-events-auto p-2 rounded-xl backdrop-blur-sm border shadow-sm shrink-0 ${isDarkMode ? 'bg-slate-900/50 border-slate-700 text-slate-300' : 'bg-white/50 border-slate-200 text-slate-600'}`}>
                     <TriangleLegend isDarkMode={isDarkMode} mode={mode} />
@@ -1273,7 +1269,7 @@ export default function ElectionVisualizer() {
             </div >
 
             {/* Zoom Slider (Right Side) */}
-            <div className="absolute right-4 bottom-32 md:right-6 md:bottom-40 z-10 pointer-events-auto flex flex-col items-center gap-2 bg-white/10 backdrop-blur-sm p-3 rounded-2xl border border-white/20 shadow-lg touch-manipulation">
+            <div className="absolute right-4 bottom-52 md:right-6 md:bottom-40 z-10 pointer-events-auto flex flex-col items-center gap-2 bg-white/10 backdrop-blur-sm p-3 rounded-2xl border border-white/20 shadow-lg touch-manipulation">
                 <button
                     onClick={() => setViewState(prev => ({ ...prev, k: Math.min(3.75, prev.k + 0.5) }))}
                     className={`p-1 rounded bg-white/20 hover:bg-white/40 transition text-xs font-bold ${isDarkMode ? 'text-white' : 'text-slate-800'}`}
