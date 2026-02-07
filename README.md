@@ -2,7 +2,7 @@
 
 An interactive, data-driven visualization of U.S. presidential election results at the county level from 2000 to 2024. Built with React, D3.js, and modern web technologies.
 
-🔗 **[Live Demo](https://github.com/keonjoe/election_viewer/)** | 📊 **[Data Source: MIT Election Data & Science Lab](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/VOQCHQ)**
+🔗 **[Live Demo](https://https://election-viewer.vercel.app/)** | 📊 **[Data Source: MIT Election Data & Science Lab](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/VOQCHQ)**
 
 ## Features
 
