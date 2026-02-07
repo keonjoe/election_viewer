@@ -64,7 +64,7 @@ const triangleArea = (p1, p2, p3) => {
 const getBarycentric = (p, p1, p2, p3) => {
     const totalArea = triangleArea(p1, p2, p3);
     if (totalArea === 0) return [0, 0, 0];
-    
+
     const area1 = triangleArea(p, p2, p3);
     const area2 = triangleArea(p1, p, p3);
     const area3 = triangleArea(p1, p2, p);
@@ -91,29 +91,29 @@ const TriangleLegend = ({ isDarkMode, mode }) => {
         const canvas = canvasRef.current;
         if (!canvas) return;
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        
+
         const width = canvas.width;
         const height = canvas.height;
 
         // Clear canvas
         ctx.clearRect(0, 0, width, height);
-        
+
         // Draw background rounded rectangle
         ctx.fillStyle = isDarkMode ? 'rgba(71, 85, 105, 0.8)' : 'rgba(100, 116, 139, 0.8)';
         ctx.beginPath();
         ctx.roundRect(0, 0, width, height, 8);
         ctx.fill();
-        
+
         // Create image data
         const imgData = ctx.createImageData(width, height);
         const data = imgData.data;
 
         // Define triangle points and center
         const points = [
-            { x: 50, y: 22, color: '#ffa500' },  // Top (3rd party) - orange
-            { x: 90, y: 92, color: '#ff0000' },  // Right (republican) - red
-            { x: 10, y: 92, color: '#0000ff' },  // Left (democrat) - blue
-            { x: 50, y: 65, color: '#800080' },  // Center - purple
+            { x: 50, y: 22, color: isDarkMode ? PARTIES.THIRD.darkColor : PARTIES.THIRD.color },
+            { x: 90, y: 92, color: isDarkMode ? PARTIES.REP.darkColor : PARTIES.REP.color },
+            { x: 10, y: 92, color: isDarkMode ? PARTIES.DEM.darkColor : PARTIES.DEM.color },
+            { x: 50, y: 65, color: '#800080' },
         ];
 
         // Pre-calculate RGBs
@@ -145,7 +145,7 @@ const TriangleLegend = ({ isDarkMode, mode }) => {
                         // Top-Right region: use third party or republican
                         const w = getBarycentric(p, p0, p1, center);
                         colorToUse = w[0] > w[1] ? c0 : c1;
-                    } 
+                    }
                     else if (isInside(p, p1, p2, center)) {
                         // Right-Left region: use republican or democrat
                         const w = getBarycentric(p, p1, p2, center);
@@ -180,7 +180,7 @@ const TriangleLegend = ({ isDarkMode, mode }) => {
                     if (isInside(p, p0, p1, center)) {
                         w = getBarycentric(p, p0, p1, center);
                         colorSet = [c0, c1, cCenter];
-                    } 
+                    }
                     else if (isInside(p, p1, p2, center)) {
                         w = getBarycentric(p, p1, p2, center);
                         colorSet = [c1, c2, cCenter];
@@ -236,9 +236,9 @@ const TriangleLegend = ({ isDarkMode, mode }) => {
 
     return (
         <div className="flex flex-col items-center gap-2">
-            <canvas 
-                ref={canvasRef} 
-                width={100} 
+            <canvas
+                ref={canvasRef}
+                width={100}
                 height={120}
                 className="drop-shadow-sm"
                 style={{ width: '100px', height: '120px' }}
@@ -380,6 +380,7 @@ export default function ElectionVisualizer() {
     const mapRef = useRef(null);
     const svgRef = useRef(null);
     const cartogramCache = useRef({});
+    const touchRef = useRef({ dist: null });
 
     // Helper: Get Interpolated Data for continuous time
     const getInterpolatedData = useCallback((fips, tYear) => {
@@ -439,7 +440,7 @@ export default function ElectionVisualizer() {
             // Use relative path - Vite serves public folder at root
             const dataUrl = '/election_data.csv.zip';
             console.log('Fetching from:', dataUrl);
-            
+
             fetch(dataUrl)
                 .then(response => {
                     if (!response.ok) {
@@ -454,14 +455,14 @@ export default function ElectionVisualizer() {
                 })
                 .then(zip => {
                     // Find the CSV file inside. Filter out macOS metadata files.
-                    const csvFilename = Object.keys(zip.files).find(name => 
+                    const csvFilename = Object.keys(zip.files).find(name =>
                         name.endsWith('.csv') && !name.includes('__MACOSX') && !name.split('/').pop().startsWith('.')
                     ) || Object.keys(zip.files).find(name => !name.endsWith('/')); // Fallback to first non-directory file
-                    
+
                     if (!csvFilename) {
                         throw new Error('No CSV file found in the zip archive');
                     }
-                    
+
                     console.log(`Extracting ${csvFilename}...`);
                     return zip.file(csvFilename).async("string");
                 })
@@ -477,7 +478,7 @@ export default function ElectionVisualizer() {
                         // Note: A robust regex parser would be safer for complex CSVs, but this works for the known format
                         // We'll just strip all quotes from values for simplicity as we know the structure
                         const values = lines[i].split(',').map(v => v.replace(/"/g, '').trim());
-                        
+
                         if (values.length < 6) continue;
 
                         const year = +values[0];
@@ -684,16 +685,17 @@ export default function ElectionVisualizer() {
         if (!mapPaths || !window.d3 || Object.keys(electionData).length === 0) return;
 
         const yearsToProcess = YEARS.filter(y => !cartogramCache.current[y]);
-        
+
         if (yearsToProcess.length === 0) {
             setCacheProgress({ count: YEARS.length, total: YEARS.length });
             return;
         }
 
         // Initialize progress display
+        // Force 0 immediately if starting fresh to ensure UI feedback
         const initialCompleted = YEARS.length - yearsToProcess.length;
         setCacheProgress({ count: initialCompleted, total: YEARS.length });
-        
+
         // Prepare simplified geometry for transfer (avoid circular refs or huge unnecessary data)
         const simplifiedMapPaths = mapPaths.map(p => ({
             id: p.id,
@@ -708,8 +710,8 @@ export default function ElectionVisualizer() {
         // Determine concurrency: Use hardware concurrency if available, cap at 6, min 2
         // We want to leave the main thread free but use available cores
         const concurrency = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 2;
-        const MAX_WORKERS = Math.max(2, Math.min(concurrency - 1, 6)); 
-        
+        const MAX_WORKERS = Math.max(2, Math.min(concurrency - 1, 6));
+
         const workers = [];
         let jobIndex = 0;
         let completedJobs = 0;
@@ -718,31 +720,31 @@ export default function ElectionVisualizer() {
         // Function to create and manage a worker
         const startWorker = () => {
             const worker = new Worker(workerUrl);
-            
+
             // Initialize geometry once per worker
             worker.postMessage({ type: 'INIT_GEOMETRY', payload: simplifiedMapPaths });
-            
+
             worker.onmessage = (e) => {
                 if (isCancelled) return;
 
                 const { type, year: resultYear, positions, error } = e.data;
-                
+
                 if (type === 'RESULT') {
                     if (positions) {
                         cartogramCache.current[resultYear] = positions;
-                        
+
                         // Live update if viewing this year (or nearest)
                         const nearestYear = YEARS.reduce((prev, curr) => Math.abs(curr - year) < Math.abs(prev - year) ? curr : prev);
                         if (resultYear === nearestYear && isSkewMode) {
                             setCartogramPositions(positions);
                         }
                     }
-                    
+
                     // Update progress
                     completedJobs++;
-                    setCacheProgress(prev => ({ 
-                        ...prev, 
-                        count: Math.min(YEARS.length, initialCompleted + completedJobs) 
+                    setCacheProgress(prev => ({
+                        ...prev,
+                        count: Math.min(YEARS.length, initialCompleted + completedJobs)
                     }));
 
                     // Pick next job
@@ -757,23 +759,36 @@ export default function ElectionVisualizer() {
                     if (jobIndex < yearsToProcess.length) dispatchJob(worker);
                 }
             };
-            
+
+            worker.onerror = (err) => {
+                console.error("Worker initialization error:", err);
+                // Mark job as done (with error) to prevent blocking
+                completedJobs++;
+                setCacheProgress(prev => ({
+                    ...prev,
+                    // Force progress to avoid 0 stuck
+                    count: Math.min(YEARS.length, initialCompleted + completedJobs)
+                }));
+                // Try next job
+                if (jobIndex < yearsToProcess.length) dispatchJob(worker);
+            };
+
             return worker;
         };
 
         // Dispatch job to worker
         const dispatchJob = (worker) => {
             if (jobIndex >= yearsToProcess.length) return;
-            
+
             const targetYear = yearsToProcess[jobIndex];
             jobIndex++;
-            
-            worker.postMessage({ 
-                type: 'CALCULATE_YEAR', 
-                payload: { 
-                    year: targetYear, 
-                    electionDataForYear: electionData[targetYear] 
-                } 
+
+            worker.postMessage({
+                type: 'CALCULATE_YEAR',
+                payload: {
+                    year: targetYear,
+                    electionDataForYear: electionData[targetYear]
+                }
             });
         };
 
@@ -812,14 +827,16 @@ export default function ElectionVisualizer() {
         if (mode === 'winner') {
             // Winner-take-all: show color of party with most votes
             if (demWeight > repWeight && demWeight > thirdWeight) {
-                return PARTIES.DEM.color;
+                return isDarkMode ? PARTIES.DEM.darkColor : PARTIES.DEM.color;
             } else if (repWeight > demWeight && repWeight > thirdWeight) {
-                return PARTIES.REP.color;
+                return isDarkMode ? PARTIES.REP.darkColor : PARTIES.REP.color;
             } else if (thirdWeight > demWeight && thirdWeight > repWeight) {
-                return PARTIES.THIRD.color;
+                return isDarkMode ? PARTIES.THIRD.darkColor : PARTIES.THIRD.color;
             }
             // Tie-breaker: Dem > Rep > Third
-            return demWeight >= repWeight ? PARTIES.DEM.color : PARTIES.REP.color;
+            return demWeight >= repWeight
+                ? (isDarkMode ? PARTIES.DEM.darkColor : PARTIES.DEM.color)
+                : (isDarkMode ? PARTIES.REP.darkColor : PARTIES.REP.color);
         } else {
             // Ternary gradient using barycentric interpolation with purple center
             if (window.d3) {
@@ -831,9 +848,9 @@ export default function ElectionVisualizer() {
                 const centerWeight = Math.max(0, 1 - (centerDistance * 1.5)); // Stronger near center
 
                 // Convert hex colors to RGB
-                const demRgb = window.d3.rgb(PARTIES.DEM.color);
-                const repRgb = window.d3.rgb(PARTIES.REP.color);
-                const thirdRgb = window.d3.rgb(PARTIES.THIRD.color);
+                const demRgb = window.d3.rgb(isDarkMode ? PARTIES.DEM.darkColor : PARTIES.DEM.color);
+                const repRgb = window.d3.rgb(isDarkMode ? PARTIES.REP.darkColor : PARTIES.REP.color);
+                const thirdRgb = window.d3.rgb(isDarkMode ? PARTIES.THIRD.darkColor : PARTIES.THIRD.color);
                 const centerRgb = window.d3.rgb(centerColor);
 
                 // Weighted average of RGB components
@@ -851,7 +868,9 @@ export default function ElectionVisualizer() {
                 return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
             }
             // Fallback
-            return demWeight > repWeight ? PARTIES.DEM.color : PARTIES.REP.color;
+            return demWeight > repWeight
+                ? (isDarkMode ? PARTIES.DEM.darkColor : PARTIES.DEM.color)
+                : (isDarkMode ? PARTIES.REP.darkColor : PARTIES.REP.color);
         }
     }, [getInterpolatedData, year, mode, isDarkMode]);
 
@@ -940,6 +959,70 @@ export default function ElectionVisualizer() {
         });
     }, [electionData]);
 
+    // Touch / Pinch-to-Zoom Handlers
+    const handleTouchStart = (e) => {
+        if (e.touches.length === 2) {
+            const t1 = e.touches[0];
+            const t2 = e.touches[1];
+            const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+            touchRef.current.dist = dist;
+        }
+    };
+
+    const handleTouchMove = (e) => {
+        if (e.touches.length === 2 && touchRef.current.dist) {
+            // e.preventDefault(); // handled by style touch-action: none
+            const t1 = e.touches[0];
+            const t2 = e.touches[1];
+            const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+
+            // Dampen the zoom speed slightly for stability
+            const scaleChange = dist / touchRef.current.dist;
+
+            const cx = (t1.clientX + t2.clientX) / 2;
+            const cy = (t1.clientY + t2.clientY) / 2;
+
+            const svg = svgRef.current;
+            if (!svg) return;
+
+            // Convert center to SVG coords
+            let offsetX, offsetY;
+            try {
+                const pt = svg.createSVGPoint();
+                pt.x = cx;
+                pt.y = cy;
+                const cursorPoint = pt.matrixTransform(svg.getScreenCTM().inverse());
+                offsetX = cursorPoint.x;
+                offsetY = cursorPoint.y;
+            } catch (err) {
+                return;
+            }
+
+            setViewState(prev => {
+                // Limit zoom per frame to avoid jumping
+                // Apply a small smoothing factor if needed, but direct ratio is usually fine for pinch
+                const rawNewK = prev.k * scaleChange;
+                const newK = Math.min(3.75, Math.max(0.5, rawNewK));
+
+                // If barely changed, skip
+                // if (Math.abs(newK - prev.k) < 0.001) return prev;
+
+                const kRatio = newK / prev.k;
+                return {
+                    k: newK,
+                    x: offsetX - (offsetX - prev.x) * kRatio,
+                    y: offsetY - (offsetY - prev.y) * kRatio
+                };
+            });
+
+            touchRef.current.dist = dist;
+        }
+    };
+
+    const handleTouchEnd = () => {
+        touchRef.current.dist = null;
+    };
+
     // Optimization: Memoize map content to avoid re-renders on hover
     const mapContent = useMemo(() => {
         // Find nearest integer year for geometry snapping
@@ -1004,11 +1087,14 @@ export default function ElectionVisualizer() {
             {/* 1. Map Layer */}
             <div
                 ref={mapRef}
-                className={`absolute inset-0 flex items-center justify-center transition-colors duration-300 ${isDarkMode ? 'bg-slate-950' : 'bg-slate-200'} cursor-grab ${isDragging ? 'cursor-grabbing' : ''}`}
+                className={`absolute inset-0 flex items-center justify-center transition-colors duration-300 ${isDarkMode ? 'bg-slate-950' : 'bg-slate-200'} cursor-grab ${isDragging ? 'cursor-grabbing' : ''} touch-none`}
                 onPointerDown={handleMouseDown}
                 onPointerMove={handleMouseDrag}
                 onPointerUp={handleMouseUp}
                 onPointerLeave={() => setIsDragging(false)}
+                onTouchStart={handleTouchStart}
+                onTouchMove={handleTouchMove}
+                onTouchEnd={handleTouchEnd}
             >
                 {topology ? (
                     <svg
@@ -1059,7 +1145,7 @@ export default function ElectionVisualizer() {
 
 
             {/* 3. Title Overlay */}
-            <div className="absolute top-6 left-6 z-10 pointer-events-none">
+            <div className="absolute top-4 left-4 md:top-6 md:left-6 z-10 pointer-events-none">
                 <div className="pointer-events-auto max-w-sm">
                     <div className="flex items-center gap-3">
                         <h1 className={`text-2xl font-bold tracking-tight leading-tight drop-shadow-sm ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
@@ -1082,15 +1168,15 @@ export default function ElectionVisualizer() {
                         ) : 'Waiting for Data...'}
                     </div>
 
-                    {/* Register to Vote Button */}
-                    <div className="mt-4">
+                    {/* Register to Vote Button (Desktop) */}
+                    <div className="mt-4 hidden md:block">
                         <a
                             href="https://vote.gov"
                             target="_blank"
                             rel="noopener noreferrer"
-                            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg font-bold text-xs shadow-md transition-all border-2 ${isDarkMode
-                                ? 'bg-blue-600 hover:bg-blue-500 text-white border-blue-400'
-                                : 'bg-blue-500 hover:bg-blue-600 text-white border-blue-300'
+                            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg font-bold text-xs shadow-md transition-all border backdrop-blur-md ${isDarkMode
+                                ? 'bg-slate-700/50 hover:bg-slate-600/70 text-slate-100 border-slate-600/50'
+                                : 'bg-slate-600/70 hover:bg-slate-700/80 text-white border-slate-500/50'
                                 }`}
                         >
                             <span className="text-base">🇺🇸</span>
@@ -1100,19 +1186,34 @@ export default function ElectionVisualizer() {
                 </div>
             </div>
 
+            {/* Mobile Register Button (Top Right) */}
+            <div className="absolute top-4 right-4 z-10 md:hidden pointer-events-auto">
+                <a
+                    href="https://vote.gov"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg font-bold text-xs shadow-md transition-all border backdrop-blur-md ${isDarkMode
+                        ? 'bg-slate-700/50 hover:bg-slate-600/70 text-slate-100 border-slate-600/50'
+                        : 'bg-slate-600/70 hover:bg-slate-700/80 text-white border-slate-500/50'
+                        }`}
+                >
+                    <span className="text-base">🇺🇸</span>
+                    <span>Register to Vote</span>
+                </a>
+            </div>
+
             {/* 4. Controls & Legend */}
-            <div className="absolute top-6 right-6 z-10 pointer-events-none flex flex-col items-end gap-2">
+            <div className="absolute z-10 pointer-events-none flex flex-row md:flex-col items-end gap-2 bottom-32 left-4 right-16 md:bottom-auto md:left-auto md:top-6 md:right-6 origin-bottom-left md:origin-top-right scale-90 md:scale-100 overflow-x-auto md:overflow-visible pr-2 md:pr-0 scrollbar-hide">
                 {/* Legend */}
-                <div className={`flex items-center gap-3 text-xs pointer-events-auto pr-1 p-3 ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>
-                    {/* Ternary Triangle Legend with Barycentric Gradient */}
+                <div className={`flex items-center gap-3 text-xs pointer-events-auto p-2 rounded-xl backdrop-blur-sm border shadow-sm shrink-0 ${isDarkMode ? 'bg-slate-900/50 border-slate-700 text-slate-300' : 'bg-white/50 border-slate-200 text-slate-600'}`}>
                     <TriangleLegend isDarkMode={isDarkMode} mode={mode} />
                 </div>
 
-                {/* Color Mode Toggle - Vertical Segmented Control */}
-                <div className={`pointer-events-auto flex flex-col rounded-lg p-1 shadow-lg border ${isDarkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white/80 border-slate-200'}`}>
+                {/* Color Mode Toggle */}
+                <div className={`pointer-events-auto flex flex-col rounded-lg p-1 shadow-lg border shrink-0 ${isDarkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white/80 border-slate-200'}`}>
                     <button
                         onClick={() => { setMode('winner'); setShowBorders(true); }}
-                        className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-xs font-bold transition-all ${mode === 'winner'
+                        className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-bold transition-all ${mode === 'winner'
                             ? (isDarkMode ? 'bg-blue-600 text-white shadow-md' : 'bg-blue-500 text-white shadow-md')
                             : (isDarkMode ? 'text-slate-400 hover:text-slate-200' : 'text-slate-600 hover:text-slate-900')
                             }`}
@@ -1122,7 +1223,7 @@ export default function ElectionVisualizer() {
                     </button>
                     <button
                         onClick={() => { setMode('gradient'); setShowBorders(false); }}
-                        className={`flex items-center gap-1.5 px-4 py-2 rounded-md text-xs font-bold transition-all ${mode === 'gradient'
+                        className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-bold transition-all ${mode === 'gradient'
                             ? (isDarkMode ? 'bg-purple-600 text-white shadow-md' : 'bg-purple-500 text-white shadow-md')
                             : (isDarkMode ? 'text-slate-400 hover:text-slate-200' : 'text-slate-600 hover:text-slate-900')
                             }`}
@@ -1132,55 +1233,54 @@ export default function ElectionVisualizer() {
                     </button>
                 </div>
 
-                {/* View Options - Stacked Vertically */}
-                <div className="flex flex-col gap-1.5 mt-2 pointer-events-auto">
-                    <button
-                        onClick={() => setIsSkewMode(!isSkewMode)}
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-md border ${isSkewMode
-                            ? (isDarkMode ? 'bg-indigo-900/50 border-indigo-500 text-indigo-300' : 'bg-indigo-50 border-indigo-200 text-indigo-600')
-                            : (isDarkMode ? 'bg-slate-800/80 border-transparent text-slate-400 hover:bg-slate-800' : 'bg-white/60 border-transparent text-slate-500 hover:bg-white')
-                            }`}
-                    >
-                        <Maximize2 size={14} />
-                        <span>Size by Votes</span>
-                    </button>
+                {/* Size by Votes */}
+                <button
+                    onClick={() => setIsSkewMode(!isSkewMode)}
+                    className={`pointer-events-auto flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-md border shrink-0 md:w-full h-[76px] md:h-auto ${isSkewMode
+                        ? (isDarkMode ? 'bg-indigo-900/80 border-indigo-500 text-indigo-300' : 'bg-indigo-50 border-indigo-200 text-indigo-600')
+                        : (isDarkMode ? 'bg-slate-800/80 border-slate-700 text-slate-400 hover:bg-slate-800' : 'bg-white/80 border-slate-200 text-slate-500 hover:bg-white backdrop-blur-sm')
+                        }`}
+                >
+                    <Maximize2 size={16} />
+                    <span className="md:inline hidden">Size by Votes</span>
+                    <span className="md:hidden inline">Size</span>
+                </button>
 
-                    {/* Theme & Borders Toggles */}
-                    <div className={`h-px w-full my-1 ${isDarkMode ? 'bg-slate-700' : 'bg-slate-200'}`}></div>
-
+                {/* Dark Mode & Borders Stack */}
+                <div className="flex flex-col gap-1.5 pointer-events-auto shrink-0">
                     <button
                         onClick={() => setIsDarkMode(!isDarkMode)}
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-md border ${isDarkMode
+                        className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-md border ${isDarkMode
                             ? 'bg-slate-800 border-slate-600 text-yellow-400 hover:bg-slate-700'
-                            : 'bg-white/60 border-transparent text-slate-500 hover:bg-white backdrop-blur-sm'
+                            : 'bg-white/80 border-slate-200 text-slate-500 hover:bg-white backdrop-blur-sm'
                             }`}
                     >
                         {isDarkMode ? <Moon size={14} /> : <Sun size={14} />}
-                        <span>{isDarkMode ? 'Dark Mode' : 'Light Mode'}</span>
+                        <span className="hidden md:inline">{isDarkMode ? 'Dark Mode' : 'Light Mode'}</span>
                     </button>
 
                     <button
                         onClick={() => setShowBorders(!showBorders)}
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-md border ${showBorders
+                        className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-md border ${showBorders
                             ? (isDarkMode ? 'bg-slate-800 border-slate-600 text-indigo-400 hover:bg-slate-700' : 'bg-white/80 border-slate-200 text-indigo-600 hover:bg-white backdrop-blur-sm')
-                            : (isDarkMode ? 'bg-slate-800/80 border-transparent text-slate-400 hover:bg-slate-800' : 'bg-white/60 border-transparent text-slate-500 hover:bg-white backdrop-blur-sm')
+                            : (isDarkMode ? 'bg-slate-800/80 border-slate-700 text-slate-400 hover:bg-slate-800' : 'bg-white/60 border-transparent text-slate-500 hover:bg-white backdrop-blur-sm')
                             }`}
                     >
                         {showBorders ? <Eye size={14} /> : <EyeOff size={14} />}
-                        <span>{showBorders ? 'Borders On' : 'Borders Off'}</span>
+                        <span className="hidden md:inline">{showBorders ? 'Borders On' : 'Borders Off'}</span>
                     </button>
                 </div>
             </div >
 
             {/* Zoom Slider (Right Side) */}
-            <div className="absolute right-6 bottom-40 z-10 pointer-events-auto flex flex-col items-center gap-2 bg-white/10 backdrop-blur-sm p-3 rounded-2xl border border-white/20 shadow-lg">
+            <div className="absolute right-4 bottom-32 md:right-6 md:bottom-40 z-10 pointer-events-auto flex flex-col items-center gap-2 bg-white/10 backdrop-blur-sm p-3 rounded-2xl border border-white/20 shadow-lg touch-manipulation">
                 <button
                     onClick={() => setViewState(prev => ({ ...prev, k: Math.min(3.75, prev.k + 0.5) }))}
                     className={`p-1 rounded bg-white/20 hover:bg-white/40 transition text-xs font-bold ${isDarkMode ? 'text-white' : 'text-slate-800'}`}
                 >
                     +
                 </button>
-                <div className="h-40 w-2 relative rounded-full overflow-hidden bg-white/20">
+                <div className="h-24 md:h-40 w-2 relative rounded-full overflow-hidden bg-white/20">
                     <input
                         type="range"
                         min="0.5"
@@ -1188,7 +1288,7 @@ export default function ElectionVisualizer() {
                         step="0.1"
                         value={viewState.k}
                         onChange={(e) => setViewState(prev => ({ ...prev, k: parseFloat(e.target.value) }))}
-                        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-40 h-10 origin-center -rotate-90 opacity-0 cursor-pointer z-20"
+                        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-24 md:w-40 h-10 origin-center -rotate-90 opacity-0 cursor-pointer z-20"
                     />
                     <div
                         className="absolute bottom-0 left-0 right-0 bg-blue-500 rounded-full transition-all duration-100"
@@ -1204,7 +1304,7 @@ export default function ElectionVisualizer() {
             </div>
 
             {/* 5. Timeline Overlay */}
-            <div className="absolute bottom-8 left-0 right-0 z-10 px-4 flex justify-center pointer-events-none">
+            <div className="absolute bottom-4 md:bottom-8 left-0 right-0 z-10 px-2 md:px-4 flex justify-center pointer-events-none">
                 <div className="w-full max-w-4xl flex flex-col gap-3 pointer-events-auto">
                     <div className="flex items-center gap-4">
                         <div className="flex flex-col items-center gap-1">
@@ -1301,16 +1401,16 @@ export default function ElectionVisualizer() {
                             <span className={`text-xs font-normal ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>{Math.round(year)}</span>
                         </div>
                         {hoveredData ? (
-                        <div className="space-y-2.5">
-                            <div>
-                                <div className="flex justify-between items-center text-xs font-bold text-blue-500 mb-1">
-                                    <span>Democrat</span>
-                                    <span>{((hoveredData.demVotes / (hoveredData.demVotes + hoveredData.repVotes + hoveredData.thirdVotes)) * 100).toFixed(1)}%</span>
+                            <div className="space-y-2.5">
+                                <div>
+                                    <div className="flex justify-between items-center text-xs font-bold text-blue-500 mb-1">
+                                        <span>Democrat</span>
+                                        <span>{((hoveredData.demVotes / (hoveredData.demVotes + hoveredData.repVotes + hoveredData.thirdVotes)) * 100).toFixed(1)}%</span>
+                                    </div>
+                                    <div className={`w-full h-2 rounded-full overflow-hidden ${isDarkMode ? 'bg-slate-800' : 'bg-slate-100'}`}>
+                                        <div className="h-full bg-blue-500" style={{ width: `${(hoveredData.demVotes / (hoveredData.demVotes + hoveredData.repVotes + hoveredData.thirdVotes)) * 100}%` }}></div>
+                                    </div>
                                 </div>
-                                <div className={`w-full h-2 rounded-full overflow-hidden ${isDarkMode ? 'bg-slate-800' : 'bg-slate-100'}`}>
-                                    <div className="h-full bg-blue-500" style={{ width: `${(hoveredData.demVotes / (hoveredData.demVotes + hoveredData.repVotes + hoveredData.thirdVotes)) * 100}%` }}></div>
-                                </div>
-                            </div>
 
                                 <div>
                                     <div className="flex justify-between items-center text-xs font-bold text-red-500 mb-1">
@@ -1319,8 +1419,8 @@ export default function ElectionVisualizer() {
                                     </div>
                                     <div className={`w-full h-2 rounded-full overflow-hidden ${isDarkMode ? 'bg-slate-800' : 'bg-slate-100'}`}>
                                         <div className="h-full bg-red-500" style={{ width: `${(hoveredData.repVotes / (hoveredData.demVotes + hoveredData.repVotes + hoveredData.thirdVotes)) * 100}%` }}></div>
+                                    </div>
                                 </div>
-                            </div>
 
                                 {/* Third Party Votes */}
                                 {hoveredData.thirdVotes > 0 && (
@@ -1352,46 +1452,46 @@ export default function ElectionVisualizer() {
                                     </div>
                                 )}
 
-                            {/* Vote History Chart */}
-                            <div className="mt-3 mb-2 pt-2 border-t border-dashed border-slate-300 dark:border-slate-700">
-                                <div className={`text-[10px] font-semibold mb-1 uppercase tracking-wider ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>Vote History</div>
-                                <div className="h-16 w-full">
-                                    {(() => {
-                                        const history = YEARS.map(y => {
-                                            const d = electionData[y]?.[hovered.id];
-                                            return {
-                                                dem: d ? d.demVotes : 0,
-                                                rep: d ? d.repVotes : 0,
-                                                third: d ? d.thirdVotes : 0
-                                            };
-                                        });
-                                        const maxVote = Math.max(...history.map(h => Math.max(h.dem, h.rep, h.third)), 1);
-                                        const points = (type) => history.map((d, i) => {
-                                            const x = (i / (history.length - 1)) * 200;
-                                            const val = type === 'dem' ? d.dem : type === 'rep' ? d.rep : d.third;
-                                            const y = 60 - ((val / maxVote) * 60);
-                                            return `${x},${y}`;
-                                        }).join(' ');
+                                {/* Vote History Chart */}
+                                <div className="mt-3 mb-2 pt-2 border-t border-dashed border-slate-300 dark:border-slate-700">
+                                    <div className={`text-[10px] font-semibold mb-1 uppercase tracking-wider ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>Vote History</div>
+                                    <div className="h-16 w-full">
+                                        {(() => {
+                                            const history = YEARS.map(y => {
+                                                const d = electionData[y]?.[hovered.id];
+                                                return {
+                                                    dem: d ? d.demVotes : 0,
+                                                    rep: d ? d.repVotes : 0,
+                                                    third: d ? d.thirdVotes : 0
+                                                };
+                                            });
+                                            const maxVote = Math.max(...history.map(h => Math.max(h.dem, h.rep, h.third)), 1);
+                                            const points = (type) => history.map((d, i) => {
+                                                const x = (i / (history.length - 1)) * 200;
+                                                const val = type === 'dem' ? d.dem : type === 'rep' ? d.rep : d.third;
+                                                const y = 60 - ((val / maxVote) * 60);
+                                                return `${x},${y}`;
+                                            }).join(' ');
 
-                                        // Use current interpolated data for the dot
-                                        const currX = ((year - YEARS[0]) / (YEARS[YEARS.length - 1] - YEARS[0])) * 200;
-                                        const currDemY = 60 - ((hoveredData.demVotes / maxVote) * 60);
-                                        const currRepY = 60 - ((hoveredData.repVotes / maxVote) * 60);
-                                        const currThirdY = 60 - ((hoveredData.thirdVotes / maxVote) * 60);
+                                            // Use current interpolated data for the dot
+                                            const currX = ((year - YEARS[0]) / (YEARS[YEARS.length - 1] - YEARS[0])) * 200;
+                                            const currDemY = 60 - ((hoveredData.demVotes / maxVote) * 60);
+                                            const currRepY = 60 - ((hoveredData.repVotes / maxVote) * 60);
+                                            const currThirdY = 60 - ((hoveredData.thirdVotes / maxVote) * 60);
 
-                                        return (
-                                            <svg viewBox="0 -5 200 70" className="w-full h-full overflow-visible">
-                                                <polyline fill="none" stroke={PARTIES.DEM.color} strokeWidth="2" points={points('dem')} strokeLinecap="round" strokeLinejoin="round" />
-                                                <polyline fill="none" stroke={PARTIES.REP.color} strokeWidth="2" points={points('rep')} strokeLinecap="round" strokeLinejoin="round" />
-                                                <polyline fill="none" stroke={PARTIES.THIRD.color} strokeWidth="2" points={points('third')} strokeLinecap="round" strokeLinejoin="round" opacity="0.8" />
-                                                <circle cx={currX} cy={currDemY} r="3" fill={PARTIES.DEM.color} stroke={isDarkMode ? '#0f172a' : '#fff'} strokeWidth="1.5" />
-                                                <circle cx={currX} cy={currRepY} r="3" fill={PARTIES.REP.color} stroke={isDarkMode ? '#0f172a' : '#fff'} strokeWidth="1.5" />
-                                                {hoveredData.thirdVotes > 0 && <circle cx={currX} cy={currThirdY} r="3" fill={PARTIES.THIRD.color} stroke={isDarkMode ? '#0f172a' : '#fff'} strokeWidth="1.5" />}
-                                            </svg>
-                                        );
-                                    })()}
+                                            return (
+                                                <svg viewBox="0 -5 200 70" className="w-full h-full overflow-visible">
+                                                    <polyline fill="none" stroke={PARTIES.DEM.color} strokeWidth="2" points={points('dem')} strokeLinecap="round" strokeLinejoin="round" />
+                                                    <polyline fill="none" stroke={PARTIES.REP.color} strokeWidth="2" points={points('rep')} strokeLinecap="round" strokeLinejoin="round" />
+                                                    <polyline fill="none" stroke={PARTIES.THIRD.color} strokeWidth="2" points={points('third')} strokeLinecap="round" strokeLinejoin="round" opacity="0.8" />
+                                                    <circle cx={currX} cy={currDemY} r="3" fill={PARTIES.DEM.color} stroke={isDarkMode ? '#0f172a' : '#fff'} strokeWidth="1.5" />
+                                                    <circle cx={currX} cy={currRepY} r="3" fill={PARTIES.REP.color} stroke={isDarkMode ? '#0f172a' : '#fff'} strokeWidth="1.5" />
+                                                    {hoveredData.thirdVotes > 0 && <circle cx={currX} cy={currThirdY} r="3" fill={PARTIES.THIRD.color} stroke={isDarkMode ? '#0f172a' : '#fff'} strokeWidth="1.5" />}
+                                                </svg>
+                                            );
+                                        })()}
+                                    </div>
                                 </div>
-                            </div>
 
                                 <div className={`text-xs pt-2 flex justify-between ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
                                     <span>Total Votes (Est)</span>
