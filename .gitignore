@@ -10,3 +10,4 @@ dist-ssr
 .env*
 .env.local
 .env.*.local
+/2000-2024
