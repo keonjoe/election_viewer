@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { Play, Pause, Info, Map as MapIcon, ChevronRight, ChevronLeft, Layers, Moon, Sun, Maximize2, Eye, EyeOff, Globe, Github } from 'lucide-react';
+import { Play, Pause, Info, Map as MapIcon, ChevronRight, ChevronLeft, Layers, Moon, Sun, Maximize2, Eye, EyeOff, Globe, Github, LayoutGrid, ScatterChart, ChevronDown, ChevronUp } from 'lucide-react';
 import JSZip from 'jszip';
 
 /**
@@ -94,26 +94,40 @@ const TriangleLegend = ({ isDarkMode, mode }) => {
 
         const width = canvas.width;
         const height = canvas.height;
+        const styleWidth = 100;
+        const styleHeight = 120;
 
         // Clear canvas
         ctx.clearRect(0, 0, width, height);
+        ctx.save();
+        ctx.scale(2, 2); // Supersample
+
+        const effectiveWidth = styleWidth;
+        const effectiveHeight = styleHeight;
 
         // Draw background rounded rectangle
         ctx.fillStyle = isDarkMode ? 'rgba(71, 85, 105, 0.8)' : 'rgba(100, 116, 139, 0.8)';
         ctx.beginPath();
-        ctx.roundRect(0, 0, width, height, 8);
+        ctx.roundRect(0, 0, effectiveWidth, effectiveHeight, 8);
         ctx.fill();
 
-        // Create image data
+        // Create image data for gradient - we need to draw this onto a temporary canvas 
+        // because direct pixel manipulation doesn't respect scale() in the same way for putImageData
+        // OR we just map pixels to the scaled coordinates. 
+        // Simpler: Just do pixel manipulation on the full sized buffer (200x240).
+
+        ctx.restore(); // Undo scale for pixel manipulation convenience
+
         const imgData = ctx.createImageData(width, height);
         const data = imgData.data;
 
-        // Define triangle points and center
+        // Define triangle points and center (scaled by 2 for high-DPI)
+        const scale = 2;
         const points = [
-            { x: 50, y: 22, color: isDarkMode ? PARTIES.THIRD.darkColor : PARTIES.THIRD.color },
-            { x: 90, y: 92, color: isDarkMode ? PARTIES.REP.darkColor : PARTIES.REP.color },
-            { x: 10, y: 92, color: isDarkMode ? PARTIES.DEM.darkColor : PARTIES.DEM.color },
-            { x: 50, y: 65, color: '#800080' },
+            { x: 50 * scale, y: 22 * scale, color: isDarkMode ? PARTIES.THIRD.darkColor : PARTIES.THIRD.color },
+            { x: 90 * scale, y: 92 * scale, color: isDarkMode ? PARTIES.REP.darkColor : PARTIES.REP.color },
+            { x: 10 * scale, y: 92 * scale, color: isDarkMode ? PARTIES.DEM.darkColor : PARTIES.DEM.color },
+            { x: 50 * scale, y: 65 * scale, color: '#800080' },
         ];
 
         // Pre-calculate RGBs
@@ -209,15 +223,7 @@ const TriangleLegend = ({ isDarkMode, mode }) => {
 
         ctx.putImageData(imgData, 0, 0);
 
-        // Draw triangle outline
-        ctx.strokeStyle = isDarkMode ? '#475569' : '#cbd5e1';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(p0.x, p0.y);
-        ctx.lineTo(p1.x, p1.y);
-        ctx.lineTo(p2.x, p2.y);
-        ctx.closePath();
-        ctx.stroke();
+
 
         // Draw labels
         ctx.font = 'bold 14px sans-serif';
@@ -238,8 +244,8 @@ const TriangleLegend = ({ isDarkMode, mode }) => {
         <div className="flex flex-col items-center gap-2">
             <canvas
                 ref={canvasRef}
-                width={100}
-                height={120}
+                width={200}
+                height={240}
                 className="drop-shadow-sm"
                 style={{ width: '100px', height: '120px' }}
             />
@@ -253,6 +259,13 @@ const TriangleLegend = ({ isDarkMode, mode }) => {
 const YEARS = [
     2000, 2004, 2008, 2012, 2016, 2020, 2024
 ];
+
+const LAYOUTS = {
+    GEO: 'geo',
+    CARTOGRAM: 'cartogram',
+    GRID: 'grid',
+    SCATTER: 'scatter'
+};
 
 const PARTIES = {
     DEM: { name: 'Democrat', color: '#0000ff', darkColor: '#00008b' }, // Pure Blue
@@ -320,8 +333,8 @@ self.onmessage = function(e) {
 
             // 3. Run simulation
             const simulation = self.d3.forceSimulation(nodes)
-                .force("x", self.d3.forceX(d => d.rx).strength(0.55))
-                .force("y", self.d3.forceY(d => d.ry).strength(0.55))
+                .force("x", self.d3.forceX(d => d.rx).strength(0.45))
+                .force("y", self.d3.forceY(d => d.ry).strength(0.45))
                 .force("collide", self.d3.forceCollide(d => d.r + 0.5).strength(1).iterations(3))
                 .stop();
 
@@ -355,8 +368,8 @@ export default function ElectionVisualizer() {
 
     const [topology, setTopology] = useState(null);
     const [year, setYear] = useState(2020);
-    const [mode, setMode] = useState('winner');
-    const [isSkewMode, setIsSkewMode] = useState(false);
+    const [mode, setMode] = useState('gradient');
+    const [layoutMode, setLayoutMode] = useState(LAYOUTS.GEO);
     const [isDarkMode, setIsDarkMode] = useState(() => {
         if (typeof window !== 'undefined' && window.matchMedia) {
             return window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -366,8 +379,17 @@ export default function ElectionVisualizer() {
     const [isPlaying, setIsPlaying] = useState(false);
     const [hovered, setHovered] = useState(null);
     const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
-    const [showBorders, setShowBorders] = useState(true);
-    const [cartogramPositions, setCartogramPositions] = useState(null);
+    const [showBorders, setShowBorders] = useState(false);
+
+    const [isMobile, setIsMobile] = useState(false);
+
+    useEffect(() => {
+        const checkMobile = () => setIsMobile(window.innerWidth < 768);
+        checkMobile();
+        window.addEventListener('resize', checkMobile);
+        return () => window.removeEventListener('resize', checkMobile);
+    }, []);
+    const [layoutPositions, setLayoutPositions] = useState(null);
     const [viewState, setViewState] = useState({ k: 1, x: 0, y: 0 });
     const [isDragging, setIsDragging] = useState(false);
     const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
@@ -379,7 +401,12 @@ export default function ElectionVisualizer() {
     const mapRef = useRef(null);
     const svgRef = useRef(null);
     const cartogramCache = useRef({});
+    const gridCache = useRef({});
+    const scatterCache = useRef({});
     const touchRef = useRef({ dist: null });
+
+    // UI Local State for Dropdown
+    const [isLayoutMenuOpen, setIsLayoutMenuOpen] = useState(false);
 
     // Helper: Get Interpolated Data for continuous time
     const getInterpolatedData = useCallback((fips, tYear) => {
@@ -552,7 +579,7 @@ export default function ElectionVisualizer() {
         if (isPlaying && Object.keys(electionData).length > 0) {
             const loop = () => {
                 setYear(prev => {
-                    const next = prev + 0.1; // 2x speed
+                    const next = prev + 0.3; // 3x speed
                     if (next > YEARS[YEARS.length - 1]) return YEARS[0]; // Infinite Loop
                     return next;
                 });
@@ -660,28 +687,222 @@ export default function ElectionVisualizer() {
         return positions;
     }, [mapPaths, electionData]);
 
-    // Cartogram Force Simulation & Background Warmer
+    // Helper: Calculate Grid Layout (Arrange by Votes)
+    const calculateGridLayout = useCallback((targetYear) => {
+        if (!mapPaths || !electionData[targetYear]) return null;
+
+        // 1. Calculate Scale Factor (Uses same logic as Cartogram for consistency)
+        let totalVotes = 0;
+        let totalArea = 0;
+        mapPaths.forEach(p => {
+            const votes = electionData[targetYear][p.id]?.total || 0;
+            totalVotes += votes;
+            totalArea += p.area;
+        });
+        const scaleFactor = totalVotes > 0 ? totalArea / totalVotes : 0;
+        if (scaleFactor === 0) return null;
+
+        // 2. Create nodes
+        const nodes = mapPaths.map(p => {
+            const data = electionData[targetYear][p.id];
+            const targetArea = (data?.total || 0) * scaleFactor;
+            const r = Math.sqrt(Math.max(0.1, targetArea) / Math.PI);
+            return {
+                id: p.id,
+                r: r,
+                votes: data?.total || 0
+            };
+        });
+
+        // 3. Sort by votes descending
+        nodes.sort((a, b) => b.votes - a.votes);
+
+        // 4. Calculate grid dimensions (4:3 Aspect Ratio)
+        const totalCircleArea = nodes.reduce((sum, n) => sum + Math.PI * n.r * n.r, 0);
+        // Estimate rectangle area (include packing inefficiency ~15%)
+        const estimatedTotalArea = totalCircleArea * 1.35;
+
+        // W * H = Area. W / H = 4 / 3 => W = 4/3 * H.
+        // 4/3 * H^2 = Area => H = sqrt(Area * 3 / 4)
+        const rectHeight = Math.sqrt(estimatedTotalArea * 3 / 4);
+        const rectWidth = rectHeight * 4 / 3;
+
+        // 5. Place circles
+        const positions = {};
+        let x = 0;
+        let y = 0;
+        let currentRowHeight = 0;
+        let maxRowWidth = 0;
+
+        nodes.forEach((node, index) => {
+            // Only wrap if not the first item
+            if (x + 2 * node.r > rectWidth && index > 0) {
+                x = 0;
+                y += currentRowHeight;
+                currentRowHeight = 0;
+            }
+
+            // If wrapping, the new row height is initially this node
+            currentRowHeight = Math.max(currentRowHeight, 2 * node.r);
+
+            // If first item in new row
+            if (x === 0) {
+                currentRowHeight = 2 * node.r;
+            }
+
+            // Align vertically to center of current row
+            positions[node.id] = {
+                x: x + node.r,
+                y: y + currentRowHeight / 2,
+                r: node.r
+            };
+
+            x += 2 * node.r;
+            maxRowWidth = Math.max(maxRowWidth, x);
+        });
+
+
+        const finalHeight = y + currentRowHeight;
+
+        // Center the whole block
+        const offsetX = (width - maxRowWidth) / 2;
+        const offsetY = (height - finalHeight) / 2;
+
+        Object.keys(positions).forEach(id => {
+            positions[id].x += offsetX;
+            positions[id].y += offsetY;
+        });
+
+        return positions;
+    }, [mapPaths, electionData]);
+
+
+
+
+    // Helper: Calculate Scatter Layout (Dem vs Rep Axis)
+    const calculateScatterLayout = useCallback((targetYear) => {
+        if (!mapPaths || !electionData[targetYear] || !window.d3) return null;
+
+        // 1. Calculate Scale Factor for radii
+        let totalVotes = 0;
+        let totalArea = 0;
+        let maxVotes = 0;
+        const nodes = [];
+
+        mapPaths.forEach(p => {
+            const votes = electionData[targetYear][p.id]?.total || 0;
+            totalVotes += votes;
+            totalArea += p.area;
+            if (votes > maxVotes) maxVotes = votes;
+        });
+        const scaleFactor = totalVotes > 0 ? totalArea / totalVotes : 0;
+        if (scaleFactor === 0) return null;
+
+        // 2. Prepare Nodes
+        const W = width;
+        const H = height;
+        const PADDING_X = 50;
+        const CENTER_Y = H / 2;
+        const MAX_Y_SPREAD = (H / 2) - 80;
+
+        mapPaths.forEach((p, index) => {
+            const data = electionData[targetYear][p.id];
+            const votes = data?.total || 0;
+            const r = Math.sqrt(Math.max(0.1, votes * scaleFactor) / Math.PI);
+
+            // X Position: Vote Share
+            let xRatio = 0.5;
+            if (data && (data.demVotes + data.repVotes) > 0) {
+                xRatio = data.repVotes / (data.demVotes + data.repVotes);
+            }
+            const targetX = PADDING_X + xRatio * (W - 2 * PADDING_X);
+
+            // Y Position: Distance from axis based on vote count
+            // Smaller votes -> Closer to axis (0). Larger -> Farther (1).
+            const normVotes = Math.max(0, Math.min(1, votes / maxVotes));
+            const distFactor = Math.sqrt(normVotes);
+            // Alternating sides mostly, but allow force to settle
+            const side = (index % 2 === 0) ? 1 : -1;
+            const targetY = CENTER_Y + side * (distFactor * MAX_Y_SPREAD);
+
+            nodes.push({
+                id: p.id,
+                r: r,
+                x: targetX, // Initial X
+                y: targetY, // Initial Y
+                targetX: targetX,
+                targetY: targetY,
+                votes: votes
+            });
+        });
+
+        // 3. Run Force Simulation Synchronously
+        // We use d3-force to resolve collisions and pull towards targets
+        const simulation = window.d3.forceSimulation(nodes)
+            .force("x", window.d3.forceX(d => d.targetX).strength(2.0)) // High strength to keep vote share accurate
+            .force("y", window.d3.forceY(d => d.targetY).strength(0.5)) // Medium strength for Y distribution
+            .force("collide", window.d3.forceCollide(d => d.r + 0.5).strength(1).iterations(2))
+            .stop();
+
+        // Run ticks manually
+        for (let i = 0; i < 40; ++i) simulation.tick();
+
+        // 4. Extract Positions
+        const positions = {};
+        nodes.forEach(node => {
+            positions[node.id] = {
+                x: node.x,
+                y: node.y,
+                r: node.r
+            };
+        });
+
+        return positions;
+    }, [mapPaths, electionData]);
+
+
+    // Layout Calculation Effect
     useEffect(() => {
-        // Find nearest integer year for geometry snapping
         const nearestYear = YEARS.reduce((prev, curr) => Math.abs(curr - year) < Math.abs(prev - year) ? curr : prev);
 
-        // 1. If we have it in cache, use it immediately
-        if (isSkewMode && cartogramCache.current[nearestYear]) {
-            setCartogramPositions(cartogramCache.current[nearestYear]);
-        }
-        // 2. If not, calculate it now (synchronously to avoid flash)
-        else if (isSkewMode && window.d3 && mapPaths && electionData[nearestYear]) {
-            const layout = calculateLayout(nearestYear);
-            if (layout) {
-                cartogramCache.current[nearestYear] = layout;
-                setCartogramPositions(layout);
+        if (layoutMode === LAYOUTS.CARTOGRAM) {
+            if (cartogramCache.current[nearestYear]) {
+                setLayoutPositions(cartogramCache.current[nearestYear]);
+            } else if (window.d3 && mapPaths && electionData[nearestYear]) {
+                const layout = calculateLayout(nearestYear);
+                if (layout) {
+                    cartogramCache.current[nearestYear] = layout;
+                    setLayoutPositions(layout);
+                }
             }
+        } else if (layoutMode === LAYOUTS.GRID) {
+            if (gridCache.current[nearestYear]) {
+                setLayoutPositions(gridCache.current[nearestYear]);
+            } else if (mapPaths && electionData[nearestYear]) {
+                const layout = calculateGridLayout(nearestYear);
+                if (layout) {
+                    gridCache.current[nearestYear] = layout;
+                    setLayoutPositions(layout);
+                }
+            }
+        } else if (layoutMode === LAYOUTS.SCATTER) {
+            if (scatterCache.current[nearestYear]) {
+                setLayoutPositions(scatterCache.current[nearestYear]);
+            } else if (mapPaths && electionData[nearestYear]) {
+                const layout = calculateScatterLayout(nearestYear);
+                if (layout) {
+                    scatterCache.current[nearestYear] = layout;
+                    setLayoutPositions(layout);
+                }
+            }
+        } else {
+            setLayoutPositions(null);
         }
-    }, [isSkewMode, year, mapPaths, electionData, calculateLayout]);
+    }, [layoutMode, year, mapPaths, electionData, calculateLayout, calculateGridLayout, calculateScatterLayout]);
 
     // Background Calculation Effect using Web Workers
     useEffect(() => {
-        if (!mapPaths || !window.d3 || Object.keys(electionData).length === 0) return;
+        if (layoutMode !== LAYOUTS.CARTOGRAM || !mapPaths || !window.d3 || Object.keys(electionData).length === 0) return;
 
         const yearsToProcess = YEARS.filter(y => !cartogramCache.current[y]);
 
@@ -734,8 +955,8 @@ export default function ElectionVisualizer() {
 
                         // Live update if viewing this year (or nearest)
                         const nearestYear = YEARS.reduce((prev, curr) => Math.abs(curr - year) < Math.abs(prev - year) ? curr : prev);
-                        if (resultYear === nearestYear && isSkewMode) {
-                            setCartogramPositions(positions);
+                        if (resultYear === nearestYear && layoutMode === LAYOUTS.CARTOGRAM) {
+                            setLayoutPositions(positions);
                         }
                     }
 
@@ -804,7 +1025,7 @@ export default function ElectionVisualizer() {
             workers.forEach(w => w.terminate());
             URL.revokeObjectURL(workerUrl);
         };
-    }, [mapPaths, electionData]); // Removed isSkewMode dependency to ensure cache fills in background always
+    }, [layoutMode, mapPaths, electionData]); // Updated dependency to layoutMode
 
     const getColor = useCallback((fips) => {
         const data = getInterpolatedData(fips, year);
@@ -951,34 +1172,31 @@ export default function ElectionVisualizer() {
     useEffect(() => { viewStateRef.current = viewState; }, [viewState]);
 
     const handleMouseMove = useCallback((e, feature) => {
-        if (!electionData || !svgRef.current) return;
+        if (!electionData || !svgRef.current || !feature) return;
 
-        const svg = svgRef.current;
-        let pt = svg.createSVGPoint();
-        pt.x = e.clientX;
-        pt.y = e.clientY;
+        // Use Centroid of the feature for stable tooltip positioning regardless of zoom
+        const pathItem = mapPaths?.find(p => p.id === feature.id);
+        if (!pathItem) return;
 
-        // 1. Screen Pixels -> SVG User Space (viewBox units)
-        // using inverse CTM to handle scaling/letterboxing
-        try {
-            const svgP = pt.matrixTransform(svg.getScreenCTM().inverse());
+        let mx = pathItem.centroid[0];
+        let my = pathItem.centroid[1];
 
-            // 2. SVG User Space -> Map Space (undo pan/zoom)
-            const vs = viewStateRef.current;
-            const mx = (svgP.x - vs.x) / vs.k;
-            const my = (svgP.y - vs.y) / vs.k;
+        // Check if we are in Layout Mode (Circle) AND have a cached position for this year
+        const nearestYear = YEARS.reduce((prev, curr) => Math.abs(curr - year) < Math.abs(prev - year) ? curr : prev);
 
-            setHovered({
-                id: feature.id,
-                name: feature.properties.name || `County ${feature.id}`,
-                mx,
-                my
-            });
-        } catch (err) {
-            // CTM might not be ready
-            return;
+        if (layoutMode !== LAYOUTS.GEO && layoutPositions && layoutPositions[feature.id]) {
+            const pos = layoutPositions[feature.id];
+            mx = pos.x;
+            my = pos.y;
         }
-    }, [electionData]);
+
+        setHovered({
+            id: feature.id,
+            name: feature.properties.name || `County ${feature.id}`,
+            mx,
+            my
+        });
+    }, [electionData, mapPaths, layoutMode, layoutPositions, year]);
 
     // Touch / Pinch-to-Zoom Handlers
     const handleTouchStart = (e) => {
@@ -1046,9 +1264,9 @@ export default function ElectionVisualizer() {
         const nearestYear = YEARS.reduce((prev, curr) => Math.abs(curr - year) < Math.abs(prev - year) ? curr : prev);
 
         return mapPaths?.map((pathItem) => {
-            if (isSkewMode && cartogramPositions) {
-                // Use nearest year for shape positions (no animation between frames)
-                const positions = cartogramCache.current[nearestYear];
+            if (layoutMode !== LAYOUTS.GEO && layoutPositions) {
+                // Use positions from current layout
+                const positions = layoutPositions; // This is already the correct year set from effect
 
                 if (positions && positions[pathItem.id]) {
                     const pos = positions[pathItem.id];
@@ -1083,9 +1301,102 @@ export default function ElectionVisualizer() {
                 />
             );
         });
-    }, [mapPaths, isSkewMode, cartogramPositions, showBorders, isDarkMode, getColor, handleMouseMove, year]);
+    }, [mapPaths, layoutMode, layoutPositions, showBorders, isDarkMode, getColor, handleMouseMove, year]);
 
     // --- Render ---
+
+    const playButton = (
+        <button
+            onClick={() => setIsPlaying(!isPlaying)}
+            disabled={Object.keys(electionData).length === 0}
+            className={`flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full transition shadow-lg focus:outline-none ${Object.keys(electionData).length === 0 ? 'opacity-50 cursor-not-allowed bg-slate-500' : (isDarkMode ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-slate-900 text-white hover:bg-slate-800')}`}
+        >
+            {isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" className="ml-0.5" />}
+        </button>
+    );
+
+    const prevButton = (
+        <button
+            onClick={() => { setIsPlaying(false); setYear(prev => Math.max(YEARS[0], prev - 0.1)); }}
+            disabled={Object.keys(electionData).length === 0}
+            className={`p-2 rounded-full transition-colors ${isDarkMode ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-200'}`}
+        >
+            <ChevronLeft size={18} />
+        </button>
+    );
+
+    const nextButton = (
+        <button
+            onClick={() => { setIsPlaying(false); setYear(prev => Math.min(YEARS[YEARS.length - 1], prev + 0.1)); }}
+            disabled={Object.keys(electionData).length === 0}
+            className={`p-2 rounded-full transition-colors ${isDarkMode ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-200'}`}
+        >
+            <ChevronRight size={18} />
+        </button>
+    );
+
+    const sliderSection = (
+        <div className="flex-1 relative mx-2">
+            <div className={`flex justify-between text-[10px] font-bold mb-1.5 uppercase tracking-wider shadow-sm ${isDarkMode ? 'text-slate-500' : 'text-slate-500'}`}>
+                {!isMobile && <span>{YEARS[0]}</span>}
+                <span className={`text-xl -mt-2 drop-shadow-sm ${isDarkMode ? 'text-slate-200' : 'text-slate-900'} ${isMobile ? 'mx-auto' : ''}`}>
+                    {YEARS.reduce((prev, curr) => Math.abs(curr - year) < Math.abs(prev - year) ? curr : prev)}
+                </span>
+                {!isMobile && <span>{YEARS[YEARS.length - 1]}</span>}
+                {/* Loading Indicator */}
+                {cacheProgress.count < cacheProgress.total && layoutMode === LAYOUTS.CARTOGRAM && (
+                    <span className={`text-[10px] animate-pulse ${isDarkMode ? 'text-yellow-400' : 'text-yellow-600'}`}>
+                        (Optimizing: {Math.round((cacheProgress.count / cacheProgress.total) * 100)}%)
+                    </span>
+                )}
+            </div>
+            <input
+                type="range"
+                min={YEARS[0]}
+                max={YEARS[YEARS.length - 1]}
+                step="0.1" // Allow smooth sliding
+                disabled={Object.keys(electionData).length === 0}
+                value={year}
+                onPointerUp={() => {
+                    // Snap on drag end
+                    const nearest = YEARS.reduce((prev, curr) => Math.abs(curr - year) < Math.abs(prev - year) ? curr : prev);
+                    setYear(nearest);
+                }}
+                onChange={(e) => { setIsPlaying(false); setYear(parseFloat(e.target.value)); }}
+                className={`w-full h-1.5 rounded-lg appearance-none cursor-pointer ${isDarkMode ? 'bg-slate-700 accent-blue-500' : 'bg-slate-300 accent-slate-900'}`}
+            />
+            {!isMobile && (
+                <div className="flex justify-between text-[10px] text-slate-400 mt-1">
+                    {YEARS.map(y => (
+                        <span key={y} className={`cursor-pointer hover:text-blue-500 transition-colors ${Math.abs(y - year) < 2 ? 'font-bold text-blue-500' : ''}`} onClick={() => { setIsPlaying(false); setYear(y); }}>{y}</span>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+
+    const timelineControls = isMobile ? (
+        // Mobile Layout: Side-by-Side
+        <div className="w-full flex items-center gap-2 pointer-events-auto px-1">
+            <div className="flex-shrink-0">
+                {playButton}
+            </div>
+            {sliderSection}
+        </div>
+    ) : (
+        // Desktop Layout: Single Row
+        <div className="w-full max-w-4xl flex flex-col gap-3 pointer-events-auto">
+            <div className="flex items-center gap-4">
+                <div className="flex flex-col items-center gap-1">
+                    {playButton}
+                </div>
+                {prevButton}
+                {sliderSection}
+                {nextButton}
+            </div>
+        </div>
+    );
+
 
     if (d3Status !== 'ready' || topoStatus !== 'ready' || dataStatus === 'loading') {
         return (
@@ -1123,7 +1434,7 @@ export default function ElectionVisualizer() {
                             {mapContent}
 
                             {/* State Borders */}
-                            {!isSkewMode && (
+                            {layoutMode === LAYOUTS.GEO && (
                                 <path
                                     d={window.d3.geoPath().projection(window.d3.geoAlbersUsa().scale(1000).translate([width / 2, height / 2]))(
                                         window.topojson.mesh(topology, topology.objects.states, (a, b) => a !== b)
@@ -1142,8 +1453,8 @@ export default function ElectionVisualizer() {
                                 if (!p) return null;
                                 // Use nearest year for geometry highlight
                                 const nearestYear = YEARS.reduce((prev, curr) => Math.abs(curr - year) < Math.abs(prev - year) ? curr : prev);
-                                if (isSkewMode && cartogramCache.current[nearestYear] && cartogramCache.current[nearestYear][p.id]) {
-                                    const pos = cartogramCache.current[nearestYear][p.id];
+                                if (layoutMode !== LAYOUTS.GEO && layoutPositions && layoutPositions[p.id]) {
+                                    const pos = layoutPositions[p.id];
                                     return <circle cx={pos.x} cy={pos.y} r={pos.r} fill="none" stroke={isDarkMode ? "#fff" : "#000"} strokeWidth={2 / pos.r} className="pointer-events-none" />;
                                 }
                                 return <path d={p.d} fill="none" stroke={isDarkMode ? "#fff" : "#000"} strokeWidth={2} className="pointer-events-none" />;
@@ -1163,7 +1474,7 @@ export default function ElectionVisualizer() {
 
             {/* 3. Title Overlay */}
             <div className="absolute top-4 left-4 md:top-6 md:left-6 z-10 pointer-events-none">
-                <div className="pointer-events-auto max-w-sm">
+                <div className={`pointer-events-auto ${isMobile ? 'w-[90vw]' : 'max-w-sm'}`}>
                     <div className="flex items-center gap-3">
                         <h1 className={`text-2xl font-bold tracking-tight leading-tight drop-shadow-sm ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
                             U.S. Election History
@@ -1184,6 +1495,9 @@ export default function ElectionVisualizer() {
                             </a>
                         ) : 'Waiting for Data...'}
                     </div>
+
+                    {/* Mobile Timeline Controls */}
+                    {isMobile && <div className="mt-4 pointer-events-auto scale-90 origin-top-left -ml-2">{timelineControls}</div>}
 
                     {/* Register to Vote Button (Desktop) */}
                     <div className="mt-4 hidden md:block">
@@ -1220,54 +1534,105 @@ export default function ElectionVisualizer() {
             </div>
 
             {/* 4. Controls & Legend */}
-            <div className="absolute z-10 pointer-events-none flex flex-row md:flex-col items-end gap-2 bottom-32 left-4 right-4 md:bottom-auto md:left-auto md:top-6 md:right-6 origin-bottom-left md:origin-top-right scale-90 md:scale-100 overflow-x-auto md:overflow-visible pr-2 md:pr-0 scrollbar-hide">
-                {/* Legend */}
-                <div className={`flex items-center gap-3 text-xs pointer-events-auto p-2 rounded-xl backdrop-blur-sm border shadow-sm shrink-0 ${isDarkMode ? 'bg-slate-900/50 border-slate-700 text-slate-300' : 'bg-white/50 border-slate-200 text-slate-600'}`}>
-                    <TriangleLegend isDarkMode={isDarkMode} mode={mode} />
+            <div className="absolute z-10 pointer-events-none flex flex-row md:flex-col items-end gap-2 bottom-2 left-4 right-4 md:bottom-auto md:left-auto md:top-6 md:right-6 origin-bottom-left md:origin-top-right scale-90 md:scale-100 flex-wrap overflow-visible pr-2 md:pr-0">
+                {/* Header Group (Legend + Link) */}
+                <div className="flex flex-row items-end md:items-start gap-2 shrink-0">
+                    {/* Legend - Order 1 Mobile, Order 2 Desktop */}
+                    <div className={`order-1 md:order-2 flex items-center gap-3 text-xs pointer-events-auto p-2 rounded-xl backdrop-blur-sm border shadow-sm shrink-0 md:w-32 md:justify-center ${isDarkMode ? 'bg-slate-900/50 border-slate-700 text-slate-300' : 'bg-white/50 border-slate-200 text-slate-600'}`}>
+                        <TriangleLegend isDarkMode={isDarkMode} mode={mode} />
+                    </div>
+
+                    {/* Color Mode Toggle - Order 2 Mobile, Order 1 Desktop */}
+                    <div className={`order-2 md:order-1 pointer-events-auto flex flex-col rounded-lg p-1 shadow-lg border shrink-0 ${isDarkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white/80 border-slate-200'}`}>
+                        <button
+                            onClick={() => { setMode('winner'); setShowBorders(true); }}
+                            className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-bold transition-all ${mode === 'winner'
+                                ? (isDarkMode ? 'bg-blue-600 text-white shadow-md' : 'bg-blue-500 text-white shadow-md')
+                                : (isDarkMode ? 'text-slate-400 hover:text-slate-200' : 'text-slate-600 hover:text-slate-900')
+                                }`}
+                        >
+                            <MapIcon size={14} />
+                            <span>Winner</span>
+                        </button>
+                        <button
+                            onClick={() => { setMode('gradient'); setShowBorders(false); }}
+                            className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-bold transition-all ${mode === 'gradient'
+                                ? (isDarkMode ? 'bg-purple-600 text-white shadow-md' : 'bg-purple-500 text-white shadow-md')
+                                : (isDarkMode ? 'text-slate-400 hover:text-slate-200' : 'text-slate-600 hover:text-slate-900')
+                                }`}
+                        >
+                            <Layers size={14} />
+                            <span>Vote %</span>
+                        </button>
+                    </div>
                 </div>
 
-                {/* Color Mode Toggle */}
-                <div className={`pointer-events-auto flex flex-col rounded-lg p-1 shadow-lg border shrink-0 ${isDarkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white/80 border-slate-200'}`}>
+                {/* View Mode Menu */}
+                <div className={`pointer-events-auto relative shrink-0 z-20 md:w-32`}>
                     <button
-                        onClick={() => { setMode('winner'); setShowBorders(true); }}
-                        className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-bold transition-all ${mode === 'winner'
-                            ? (isDarkMode ? 'bg-blue-600 text-white shadow-md' : 'bg-blue-500 text-white shadow-md')
-                            : (isDarkMode ? 'text-slate-400 hover:text-slate-200' : 'text-slate-600 hover:text-slate-900')
+                        onClick={() => setIsLayoutMenuOpen(!isLayoutMenuOpen)}
+                        className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-md border w-full h-[40px] md:h-auto ${layoutMode !== LAYOUTS.GEO
+                            ? (isDarkMode ? 'bg-indigo-900/80 border-indigo-500 text-indigo-300' : 'bg-indigo-50 border-indigo-200 text-indigo-600')
+                            : (isDarkMode ? 'bg-slate-800/80 border-slate-700 text-slate-400 hover:bg-slate-800' : 'bg-white/80 border-slate-200 text-slate-500 hover:bg-white backdrop-blur-sm')
                             }`}
                     >
-                        <MapIcon size={14} />
-                        <span>Winner</span>
-                    </button>
-                    <button
-                        onClick={() => { setMode('gradient'); setShowBorders(false); }}
-                        className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-bold transition-all ${mode === 'gradient'
-                            ? (isDarkMode ? 'bg-purple-600 text-white shadow-md' : 'bg-purple-500 text-white shadow-md')
-                            : (isDarkMode ? 'text-slate-400 hover:text-slate-200' : 'text-slate-600 hover:text-slate-900')
-                            }`}
-                    >
-                        <Layers size={14} />
-                        <span>Vote %</span>
-                    </button>
-                </div>
+                        <div className="flex items-center gap-2">
+                            {layoutMode === LAYOUTS.GEO && <Globe size={16} />}
+                            {layoutMode === LAYOUTS.CARTOGRAM && <Maximize2 size={16} />}
+                            {layoutMode === LAYOUTS.GRID && <LayoutGrid size={16} />}
+                            {layoutMode === LAYOUTS.SCATTER && <ScatterChart size={16} />}
 
-                {/* Size by Votes */}
-                <button
-                    onClick={() => setIsSkewMode(!isSkewMode)}
-                    className={`pointer-events-auto flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-md border shrink-0 md:w-full h-[76px] md:h-auto ${isSkewMode
-                        ? (isDarkMode ? 'bg-indigo-900/80 border-indigo-500 text-indigo-300' : 'bg-indigo-50 border-indigo-200 text-indigo-600')
-                        : (isDarkMode ? 'bg-slate-800/80 border-slate-700 text-slate-400 hover:bg-slate-800' : 'bg-white/80 border-slate-200 text-slate-500 hover:bg-white backdrop-blur-sm')
-                        }`}
-                >
-                    <Maximize2 size={16} />
-                    <span className="md:inline hidden">Size by Votes</span>
-                    <span className="md:hidden inline">Size</span>
-                </button>
+                            <span className="md:inline hidden">
+                                {layoutMode === LAYOUTS.GEO ? 'Geography' :
+                                    (layoutMode === LAYOUTS.CARTOGRAM ? 'Size by Votes' :
+                                        (layoutMode === LAYOUTS.GRID ? 'Arrange by Votes' : 'Vote Spectrum'))}
+                            </span>
+                            <span className="md:hidden inline">
+                                {layoutMode === LAYOUTS.GEO ? 'Geo' : (layoutMode === LAYOUTS.CARTOGRAM ? 'Size' : (layoutMode === LAYOUTS.GRID ? 'Grid' : 'Axis'))}
+                            </span>
+                        </div>
+                        {isLayoutMenuOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    </button>
+
+                    {/* Dropdown Menu */}
+                    {isLayoutMenuOpen && (
+                        <div className={`${isMobile
+                            ? 'fixed bottom-[160px] left-4 right-4 z-[100] w-auto shadow-2xl touch-none'
+                            : 'absolute bottom-full left-0 mb-2 w-48 md:bottom-auto md:top-full md:mt-2 shadow-xl'} rounded-xl border overflow-hidden backdrop-blur-md flex flex-col ${isDarkMode ? 'bg-slate-900/95 border-slate-700' : 'bg-white/95 border-slate-200'}`}>
+                            {[
+                                { id: LAYOUTS.GEO, label: 'Geography', icon: Globe, desc: 'Standard Map' },
+                                { id: LAYOUTS.CARTOGRAM, label: 'Size by Votes', icon: Maximize2, desc: 'Dorling Cartogram' },
+                                { id: LAYOUTS.GRID, label: 'Arrange by Votes', icon: LayoutGrid, desc: 'Sorted Grid' },
+                                { id: LAYOUTS.SCATTER, label: 'Vote Spectrum', icon: ScatterChart, desc: 'Dem vs Rep Axis' }
+                            ].map((opt) => (
+                                <button
+                                    key={opt.id}
+                                    onClick={() => {
+                                        setLayoutMode(opt.id);
+                                        setIsLayoutMenuOpen(false);
+                                    }}
+                                    className={`flex items-center gap-3 px-4 py-3 text-left transition-colors ${layoutMode === opt.id
+                                        ? (isDarkMode ? 'bg-indigo-900/50 text-indigo-300' : 'bg-indigo-50 text-indigo-600')
+                                        : (isDarkMode ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-50')
+                                        }`}
+                                >
+                                    <opt.icon size={16} className={layoutMode === opt.id ? 'text-current' : (isDarkMode ? 'text-slate-500' : 'text-slate-400')} />
+                                    <div>
+                                        <div className="text-xs font-bold">{opt.label}</div>
+                                        <div className={`text-[10px] ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>{opt.desc}</div>
+                                    </div>
+                                    {layoutMode === opt.id && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-current"></div>}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </div>
 
                 {/* Dark Mode & Borders Stack */}
-                <div className="flex flex-col gap-1.5 pointer-events-auto shrink-0">
+                <div className="flex flex-col gap-1.5 pointer-events-auto shrink-0 md:w-32">
                     <button
                         onClick={() => setIsDarkMode(!isDarkMode)}
-                        className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-md border ${isDarkMode
+                        className={`flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-md border w-full ${isDarkMode
                             ? 'bg-slate-800 border-slate-600 text-yellow-400 hover:bg-slate-700'
                             : 'bg-white/80 border-slate-200 text-slate-500 hover:bg-white backdrop-blur-sm'
                             }`}
@@ -1278,117 +1643,25 @@ export default function ElectionVisualizer() {
 
                     <button
                         onClick={() => setShowBorders(!showBorders)}
-                        className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-md border ${showBorders
+                        className={`flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-md border w-full ${showBorders
                             ? (isDarkMode ? 'bg-slate-800 border-slate-600 text-indigo-400 hover:bg-slate-700' : 'bg-white/80 border-slate-200 text-indigo-600 hover:bg-white backdrop-blur-sm')
                             : (isDarkMode ? 'bg-slate-800/80 border-slate-700 text-slate-400 hover:bg-slate-800' : 'bg-white/60 border-transparent text-slate-500 hover:bg-white backdrop-blur-sm')
                             }`}
                     >
                         {showBorders ? <Eye size={14} /> : <EyeOff size={14} />}
-                        <span className="hidden md:inline">{showBorders ? 'Borders On' : 'Borders Off'}</span>
+                        <span className="hidden md:inline">{showBorders ? 'Hide Borders' : 'See Borders'}</span>
                     </button>
                 </div>
             </div >
 
-            {/* Zoom Slider (Right Side) */}
-            <div className="absolute right-4 bottom-52 md:right-6 md:bottom-40 z-10 pointer-events-auto flex flex-col items-center gap-2 bg-white/10 backdrop-blur-sm p-3 rounded-2xl border border-white/20 shadow-lg touch-manipulation">
-                <button
-                    onClick={() => setViewState(prev => ({ ...prev, k: Math.min(3.75, prev.k + 0.5) }))}
-                    className={`p-1 rounded bg-white/20 hover:bg-white/40 transition text-xs font-bold ${isDarkMode ? 'text-white' : 'text-slate-800'}`}
-                >
-                    +
-                </button>
-                <div className="h-24 md:h-40 w-2 relative rounded-full overflow-hidden bg-white/20">
-                    <input
-                        type="range"
-                        min="0.5"
-                        max="3.75"
-                        step="0.1"
-                        value={viewState.k}
-                        onChange={(e) => setViewState(prev => ({ ...prev, k: parseFloat(e.target.value) }))}
-                        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-24 md:w-40 h-10 origin-center -rotate-90 opacity-0 cursor-pointer z-20"
-                    />
-                    <div
-                        className="absolute bottom-0 left-0 right-0 bg-blue-500 rounded-full transition-all duration-100"
-                        style={{ height: `${((viewState.k - 0.5) / 3.25) * 100}%` }}
-                    ></div>
+
+
+            {/* 5. Timeline Overlay (Desktop Only) */}
+            {!isMobile && (
+                <div className="absolute bottom-12 md:bottom-8 left-0 right-0 z-10 px-2 md:px-4 flex justify-center pointer-events-none">
+                    {timelineControls}
                 </div>
-                <button
-                    onClick={() => setViewState(prev => ({ ...prev, k: Math.max(0.5, prev.k - 0.5) }))}
-                    className={`p-1 rounded bg-white/20 hover:bg-white/40 transition text-xs font-bold ${isDarkMode ? 'text-white' : 'text-slate-800'}`}
-                >
-                    -
-                </button>
-            </div>
-
-            {/* 5. Timeline Overlay */}
-            <div className="absolute bottom-12 md:bottom-8 left-0 right-0 z-10 px-2 md:px-4 flex justify-center pointer-events-none">
-                <div className="w-full max-w-4xl flex flex-col gap-3 pointer-events-auto">
-                    <div className="flex items-center gap-4">
-                        <div className="flex flex-col items-center gap-1">
-                            <button
-                                onClick={() => setIsPlaying(!isPlaying)}
-                                disabled={Object.keys(electionData).length === 0}
-                                className={`flex-shrink-0 flex items-center justify-center w-10 h-10 rounded-full transition shadow-lg focus:outline-none ${Object.keys(electionData).length === 0 ? 'opacity-50 cursor-not-allowed bg-slate-500' : (isDarkMode ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-slate-900 text-white hover:bg-slate-800')}`}
-                            >
-                                {isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" className="ml-0.5" />}
-                            </button>
-
-                        </div>
-
-                        <button
-                            onClick={() => { setIsPlaying(false); setYear(prev => Math.max(YEARS[0], prev - 0.1)); }}
-                            disabled={Object.keys(electionData).length === 0}
-                            className={`p-2 rounded-full transition-colors ${isDarkMode ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-200'}`}
-                        >
-                            <ChevronLeft size={18} />
-                        </button>
-
-                        <div className="flex-1 relative mx-2">
-                            <div className={`flex justify-between text-[10px] font-bold mb-1.5 uppercase tracking-wider shadow-sm ${isDarkMode ? 'text-slate-500' : 'text-slate-500'}`}>
-                                <span>{YEARS[0]}</span>
-                                <span className={`text-xl -mt-2 drop-shadow-sm ${isDarkMode ? 'text-slate-200' : 'text-slate-900'}`}>
-                                    {YEARS.reduce((prev, curr) => Math.abs(curr - year) < Math.abs(prev - year) ? curr : prev)}
-                                </span>
-                                <span>{YEARS[YEARS.length - 1]}</span>
-                                {/* Loading Indicator */}
-                                {cacheProgress.count < cacheProgress.total && isSkewMode && (
-                                    <span className={`text-[10px] animate-pulse ${isDarkMode ? 'text-yellow-400' : 'text-yellow-600'}`}>
-                                        (Optimizing: {Math.round((cacheProgress.count / cacheProgress.total) * 100)}%)
-                                    </span>
-                                )}
-                            </div>
-                            <input
-                                type="range"
-                                min={YEARS[0]}
-                                max={YEARS[YEARS.length - 1]}
-                                step="0.1" // Allow smooth sliding
-                                disabled={Object.keys(electionData).length === 0}
-                                value={year}
-                                onPointerUp={() => {
-                                    // Snap on drag end
-                                    const nearest = YEARS.reduce((prev, curr) => Math.abs(curr - year) < Math.abs(prev - year) ? curr : prev);
-                                    setYear(nearest);
-                                }}
-                                onChange={(e) => { setIsPlaying(false); setYear(parseFloat(e.target.value)); }}
-                                className={`w-full h-1.5 rounded-lg appearance-none cursor-pointer ${isDarkMode ? 'bg-slate-700 accent-blue-500' : 'bg-slate-300 accent-slate-900'}`}
-                            />
-                            <div className="flex justify-between text-[10px] text-slate-400 mt-1">
-                                {YEARS.map(y => (
-                                    <span key={y} className={`cursor-pointer hover:text-blue-500 transition-colors ${Math.abs(y - year) < 2 ? 'font-bold text-blue-500' : ''}`} onClick={() => { setIsPlaying(false); setYear(y); }}>{y}</span>
-                                ))}
-                            </div>
-                        </div>
-
-                        <button
-                            onClick={() => { setIsPlaying(false); setYear(prev => Math.min(YEARS[YEARS.length - 1], prev + 0.1)); }}
-                            disabled={Object.keys(electionData).length === 0}
-                            className={`p-2 rounded-full transition-colors ${isDarkMode ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-200'}`}
-                        >
-                            <ChevronRight size={18} />
-                        </button>
-                    </div>
-                </div>
-            </div>
+            )}
 
             {/* Floating Tooltip */}
             {hovered && (() => {
@@ -1554,7 +1827,7 @@ export default function ElectionVisualizer() {
 
             {/* Blocking Cache Generation Overlay */}
             {
-                cacheProgress.count < cacheProgress.total && (
+                cacheProgress.count < cacheProgress.total && layoutMode === LAYOUTS.CARTOGRAM && (
                     <div className="absolute inset-0 z-[100] bg-slate-900/80 backdrop-blur-sm flex flex-col items-center justify-center text-white pointer-events-auto cursor-wait">
                         <div className="bg-slate-800 p-8 rounded-2xl shadow-2xl border border-slate-700 max-w-md w-full text-center">
                             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-6"></div>
