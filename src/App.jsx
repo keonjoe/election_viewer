@@ -13,7 +13,10 @@ const useScript = (src) => {
             setStatus('idle');
             return;
         }
-        let script = document.querySelector(`script[src="${src}"]`);
+        // Security: validate URL before injecting script
+        try { new URL(src); } catch { setStatus('error'); return; }
+
+        let script = document.querySelector(`script[src="${CSS.escape(src)}"]`);
         if (!script) {
             script = document.createElement('script');
             script.src = src;
@@ -377,7 +380,7 @@ export default function ElectionVisualizer() {
     const [dataStatus, setDataStatus] = useState('idle'); // idle, loading, ready, error
 
     const [topology, setTopology] = useState(null);
-    const [year, setYear] = useState(2020);
+    const [year, setYear] = useState(YEARS[0]);
     const [mode, setMode] = useState('gradient');
     const [layoutMode, setLayoutMode] = useState(LAYOUTS.GEO);
     const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -416,12 +419,25 @@ export default function ElectionVisualizer() {
     const scatterCache = useRef({});
     const touchRef = useRef({ dist: null });
 
+    // Animation Ref
+    const animationRef = useRef(null);
+    const lastTimeRef = useRef(null);
+
+    // Spectrum/Scatter Filter State
+    const [globalMaxVotes, setGlobalMaxVotes] = useState(1000000);
+    const [popFilter, setPopFilter] = useState({ min: 0, max: 1000000 });
+    const [uiPopRange, setUiPopRange] = useState([0, 1000000]); // [min, max]
+    const [isGeneratingScatter, setIsGeneratingScatter] = useState(false);
+    const [scatterProgress, setScatterProgress] = useState({ count: 0, total: 0 });
+    const scatterDebounceRef = useRef(null);
+
     // UI Local State for Dropdown
     const [isLayoutMenuOpen, setIsLayoutMenuOpen] = useState(false);
 
     // Helper: Get Interpolated Data for continuous time
     const getInterpolatedData = useCallback((fips, tYear) => {
-        if (!electionData || Object.keys(electionData).length === 0) return null;
+        const years = Object.keys(electionData);
+        if (!electionData || years.length === 0) return null;
 
         const prevYear = YEARS.filter(y => y <= tYear).pop() || YEARS[0];
         const nextYear = YEARS.find(y => y > tYear) || YEARS[YEARS.length - 1];
@@ -461,11 +477,13 @@ export default function ElectionVisualizer() {
 
     // 1. Initialize Map
     useEffect(() => {
-        if (d3Status === 'ready' && topoStatus === 'ready') {
-            fetch('https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json')
-                .then(response => response.json())
-                .then(us => setTopology(us));
-        }
+        if (d3Status !== 'ready' || topoStatus !== 'ready') return;
+        const controller = new AbortController();
+        fetch('https://cdn.jsdelivr.net/npm/us-atlas@3/counties-10m.json', { signal: controller.signal })
+            .then(response => response.json())
+            .then(us => setTopology(us))
+            .catch(err => { if (err.name !== 'AbortError') console.error('Failed to load topology:', err); });
+        return () => controller.abort();
     }, [d3Status, topoStatus]);
 
     // 2. Load CSV Data (Optimized - Zipped)
@@ -473,21 +491,16 @@ export default function ElectionVisualizer() {
         if (d3Status === 'ready' && dataStatus === 'idle') {
             setDataStatus('loading');
 
-            // Fetch Zipped CSV and decompress using JSZip
-            // Use relative path - Vite serves public folder at root
             const dataUrl = '/election_data.csv.zip';
-            console.log('Fetching from:', dataUrl);
 
             fetch(dataUrl)
                 .then(response => {
                     if (!response.ok) {
                         throw new Error(`HTTP error! status: ${response.status}`);
                     }
-                    console.log('Fetched zipped election data successfully');
                     return response.arrayBuffer();
                 })
                 .then(buffer => {
-                    console.log('Buffer size:', buffer.byteLength);
                     return JSZip.loadAsync(buffer);
                 })
                 .then(zip => {
@@ -500,11 +513,9 @@ export default function ElectionVisualizer() {
                         throw new Error('No CSV file found in the zip archive');
                     }
 
-                    console.log(`Extracting ${csvFilename}...`);
                     return zip.file(csvFilename).async("string");
                 })
                 .then(csvText => {
-                    console.log('Parsing CSV data...');
                     // Parse CSV manually
                     const lines = csvText.trim().split('\n');
                     const allData = {};
@@ -525,11 +536,7 @@ export default function ElectionVisualizer() {
                         const third = +values[4];
                         const total = +values[5];
 
-                        // Debug: Log Dane County (55025) and Brewster County (48043) 2024 data
-                        if (year === 2024 && (fips === '55025' || fips === '48043')) {
-                            console.log(`${fips} (${year}): dem=${dem}, rep=${rep}, third=${third}, total=${total}`);
-                            console.log('Raw line:', lines[i]);
-                        }
+
 
                         // Parse third-party candidates (format: "NAME|PARTY|VOTES")
                         const third1Raw = values[6] ? values[6].replace(/"/g, '') : '';
@@ -570,39 +577,84 @@ export default function ElectionVisualizer() {
                         };
                     }
 
-                    console.log('Data loaded successfully:', Object.keys(allData).length, 'years');
+
+                    let calculatedMaxVotes = 0;
+                    // Provide a default if no data
+                    if (Object.keys(allData).length === 0) calculatedMaxVotes = 10000;
+
+                    // Calculate Global Max Votes for Slider Scale
+                    Object.values(allData).forEach(yearData => {
+                        Object.values(yearData).forEach(county => {
+                            if (county.total > calculatedMaxVotes) calculatedMaxVotes = county.total;
+                        });
+                    });
+
+                    // Round up to nearest nice number
+                    calculatedMaxVotes = Math.ceil(calculatedMaxVotes / 10000) * 10000;
+
                     setElectionData(allData);
+                    setGlobalMaxVotes(calculatedMaxVotes);
+                    setPopFilter({ min: 0, max: calculatedMaxVotes });
+                    setUiPopRange([0, calculatedMaxVotes]);
                     setDataStatus('ready');
                 })
                 .catch(err => {
-                    console.error("Failed to load data:", err);
-                    console.error("Error type:", err.constructor.name);
-                    console.error("Error message:", err.message);
-                    console.error("Error stack:", err.stack);
+                    console.error('Failed to load election data:', err.message);
                     setDataStatus('error');
                 });
         }
     }, [d3Status, dataStatus]);
 
-    // Playback Loop (Continuous)
+    // Playback Loop (Continuous) - Time Based
     useEffect(() => {
         let animationId;
-        if (isPlaying && Object.keys(electionData).length > 0) {
-            const loop = () => {
-                setYear(prev => {
-                    const next = prev + 0.3; // 3x speed
-                    if (next > YEARS[YEARS.length - 1]) return YEARS[0]; // Infinite Loop
-                    return next;
-                });
-                animationId = requestAnimationFrame(loop);
+        if (isPlaying && Object.keys(electionData).length > 0) {  // eslint-disable-line
+
+            // Reset start time if just started
+            // We want to continue from current year, so we reverse calculate start time
+            // Progress = (Year - Start) / Range
+            // Progress = Elapsed / Duration
+            // Elapsed = Progress * Duration
+            // StartTime = Now - Elapsed
+
+            const totalDuration = 5000; // 5 seconds
+            const yearRange = YEARS[YEARS.length - 1] - YEARS[0];
+
+            const startLoop = (timestamp) => {
+                if (!lastTimeRef.current) lastTimeRef.current = timestamp;
+
+                // Calculate conceptual start time based on current year to allow resuming
+                const currentProgress = (year - YEARS[0]) / yearRange;
+                const elapsedAlready = currentProgress * totalDuration;
+
+                // If we are starting fresh/paused, we set the 'anchor' generic start time
+                if (!animationRef.current) {
+                    animationRef.current = timestamp - elapsedAlready;
+                }
+
+                const loop = (now) => {
+                    const elapsed = now - animationRef.current;
+                    const progress = (elapsed % totalDuration) / totalDuration;
+
+                    const newYear = YEARS[0] + progress * yearRange;
+                    setYear(newYear);
+
+                    animationId = requestAnimationFrame(loop);
+                };
+                loop(timestamp);
             };
-            loop();
+
+            animationId = requestAnimationFrame(startLoop);
         } else {
-            // Snap to nearest 4-year election cycle when paused
-            // Use functional update to avoid 'year' dependency and avoid re-renders during drag
+            // Reset refs when paused
+            animationRef.current = null;
+            lastTimeRef.current = null;
+
+            // Snap to nearest cycle
             setYear(currentYear => {
+                // only snap if we are not scrubbing
+                if (isScrubbing) return currentYear;
                 const nearest = YEARS.reduce((prev, curr) => Math.abs(curr - currentYear) < Math.abs(prev - currentYear) ? curr : prev);
-                // Only snap if significantly different (though React handles same-value bailouts)
                 return nearest;
             });
         }
@@ -791,8 +843,11 @@ export default function ElectionVisualizer() {
 
 
     // Helper: Calculate Scatter Layout (Dem vs Rep Axis)
-    const calculateScatterLayout = useCallback((targetYear) => {
+    // Modified to accept optional filter range, otherwise uses state
+    const calculateScatterLayout = useCallback((targetYear, customFilter = null) => {
         if (!mapPaths || !electionData[targetYear] || !window.d3) return null;
+
+        const range = customFilter || popFilter;
 
         // 1. Calculate Scale Factor for radii
         let totalVotes = 0;
@@ -800,13 +855,31 @@ export default function ElectionVisualizer() {
         let maxVotes = 0;
         const nodes = [];
 
-        mapPaths.forEach(p => {
+        // Pre-filter mapPaths to only include those in range
+        const activePaths = mapPaths.filter(p => {
+            const votes = electionData[targetYear][p.id]?.total || 0;
+            return votes >= range.min && votes <= range.max;
+        });
+
+        if (activePaths.length === 0) return {};
+
+        activePaths.forEach(p => {
             const votes = electionData[targetYear][p.id]?.total || 0;
             totalVotes += votes;
             totalArea += p.area;
             if (votes > maxVotes) maxVotes = votes;
         });
+
+        // Use global max votes for consistent sizing across years if preferred, 
+        // OR use the local max of the filtered set. 
+        // To keep "spectrum" consistently sized, we should probably rely on a stable factor 
+        // or just use the filtered set's characteristics. 
+        // Using the filtered set's sum ensures they are visible.
+
         const scaleFactor = totalVotes > 0 ? totalArea / totalVotes : 0;
+        // Fix: If scaleFactor is too small because we filtered down to small counties, they might disappear.
+        // But Dorling cartogram principle: area ~ votes.
+
         if (scaleFactor === 0) return null;
 
         // 2. Prepare Nodes
@@ -816,24 +889,33 @@ export default function ElectionVisualizer() {
         const CENTER_Y = H / 2;
         const MAX_Y_SPREAD = (H / 2) - 80;
 
-        mapPaths.forEach((p, index) => {
+        activePaths.forEach((p, index) => {
             const data = electionData[targetYear][p.id];
             const votes = data?.total || 0;
+
+            // Double Check (redundant but safe)
+            if (votes < range.min || votes > range.max) return;
+
             const r = Math.sqrt(Math.max(0.1, votes * scaleFactor) / Math.PI);
 
-            // X Position: Vote Share
-            let xRatio = 0.5;
-            if (data && (data.demVotes + data.repVotes) > 0) {
-                xRatio = data.repVotes / (data.demVotes + data.repVotes);
-            }
+            // X Position: Vote Share (two-party ratio)
+            const twoParty = (data?.demVotes || 0) + (data?.repVotes || 0);
+            const xRatio = twoParty > 0 ? (data.repVotes / twoParty) : 0.5;
             const targetX = PADDING_X + xRatio * (W - 2 * PADDING_X);
 
             // Y Position: Distance from axis based on vote count
             // Smaller votes -> Closer to axis (0). Larger -> Farther (1).
-            const normVotes = Math.max(0, Math.min(1, votes / maxVotes));
+            // Use local maxVotes for distribution spread within the view
+            const normVotes = maxVotes > 0 ? Math.max(0, Math.min(1, votes / maxVotes)) : 0;
             const distFactor = Math.sqrt(normVotes);
-            // Alternating sides mostly, but allow force to settle
-            const side = (index % 2 === 0) ? 1 : -1;
+
+            // Use consistent side assignment based on county ID (not index)
+            // Simple hash: sum of character codes in the FIPS ID
+            let hash = 0;
+            for (let i = 0; i < p.id.length; i++) {
+                hash += p.id.charCodeAt(i);
+            }
+            const side = (hash % 2 === 0) ? 1 : -1;
             const targetY = CENTER_Y + side * (distFactor * MAX_Y_SPREAD);
 
             nodes.push({
@@ -869,19 +951,94 @@ export default function ElectionVisualizer() {
         });
 
         return positions;
-    }, [mapPaths, electionData]);
+    }, [mapPaths, electionData, popFilter, width, height]);
+
+    // Regenerate Scatter Cache Routine
+    const regenerateScatterCache = useCallback((range) => {
+        setIsGeneratingScatter(true);
+        setScatterProgress({ count: 0, total: YEARS.length });
+
+        // Clear existing cache
+        scatterCache.current = {};
+
+        const years = [...YEARS];
+        let index = 0;
+        let cancelled = false;
+
+        // Cancel any previous regeneration chain
+        if (scatterCache._cancelRegeneration) {
+            scatterCache._cancelRegeneration();
+        }
+        scatterCache._cancelRegeneration = () => { cancelled = true; };
+
+        const processNext = () => {
+            if (cancelled) return;
+            if (index >= years.length) {
+                setIsGeneratingScatter(false);
+                const nearestYear = YEARS.reduce((prev, curr) => Math.abs(curr - year) < Math.abs(prev - year) ? curr : prev);
+                const layout = scatterCache.current[nearestYear];
+                if (layout) setLayoutPositions(layout);
+                return;
+            }
+
+            const y = years[index];
+            try {
+                const layout = calculateScatterLayout(y, range);
+                scatterCache.current[y] = layout;
+            } catch (err) {
+                console.error("Error generating scatter layout for", y, err);
+            }
+
+            setScatterProgress(prev => ({ ...prev, count: index + 1 }));
+            index++;
+
+            setTimeout(processNext, 10);
+        };
+
+        setTimeout(processNext, 50);
+    }, [calculateScatterLayout, year]);
+
+    // Slider Change Handler (Debounced)
+    const handlePopSliderChange = useCallback((newRange) => {
+        setUiPopRange(newRange);
+
+        if (scatterDebounceRef.current) {
+            clearTimeout(scatterDebounceRef.current);
+        }
+
+        scatterDebounceRef.current = setTimeout(() => {
+            setPopFilter({ min: newRange[0], max: newRange[1] });
+            regenerateScatterCache({ min: newRange[0], max: newRange[1] });
+        }, 250); // 0.25s delay
+    }, [regenerateScatterCache]);
+
+    // Cleanup scatter debounce and regeneration on unmount
+    useEffect(() => {
+        return () => {
+            if (scatterDebounceRef.current) clearTimeout(scatterDebounceRef.current);
+            if (scatterCache._cancelRegeneration) scatterCache._cancelRegeneration();
+        };
+    }, []);
+
+    // Initialize Scatter Cache when entering scatter mode for the first time
+    useEffect(() => {
+        if (layoutMode === LAYOUTS.SCATTER && Object.keys(scatterCache.current).length === 0 && !isGeneratingScatter) {
+            // Generate initial cache with current filter
+            regenerateScatterCache(popFilter);
+        }
+    }, [layoutMode, regenerateScatterCache, popFilter, isGeneratingScatter]);
 
     // Helper: Interpolate layout positions between two years
     const interpolateLayoutPositions = useCallback((prevYearPos, nextYearPos, ratio) => {
         if (!prevYearPos || !nextYearPos) return prevYearPos || nextYearPos;
-        
+
         const interpolated = {};
         const allIds = new Set([...Object.keys(prevYearPos), ...Object.keys(nextYearPos)]);
-        
+
         for (const id of allIds) {
             const prev = prevYearPos[id];
             const next = nextYearPos[id];
-            
+
             if (prev && next) {
                 interpolated[id] = {
                     x: prev.x + (next.x - prev.x) * ratio,
@@ -892,13 +1049,19 @@ export default function ElectionVisualizer() {
                 interpolated[id] = prev || next;
             }
         }
-        
+
         return interpolated;
     }, []);
 
     // Layout Calculation Effect with Interpolation (for scatter and grid modes)
     useEffect(() => {
         const getLayoutForYear = (targetYear, cacheRef, calculateFunc) => {
+            // For scatter mode, ONLY use cache (don't calculate on-the-fly)
+            if (layoutMode === LAYOUTS.SCATTER) {
+                return cacheRef.current[targetYear] || null;
+            }
+
+            // For other modes, calculate if not cached
             if (cacheRef.current[targetYear]) {
                 return cacheRef.current[targetYear];
             } else if (mapPaths && electionData[targetYear]) {
@@ -913,6 +1076,11 @@ export default function ElectionVisualizer() {
 
         // Interpolate for scatter mode only, use nearest year for cartogram and grid
         if (layoutMode === LAYOUTS.SCATTER) {
+            // Don't render anything while scatter cache is being regenerated
+            if (isGeneratingScatter) {
+                return;
+            }
+
             // Interpolate between election years for smooth animation
             const prevYear = YEARS.filter(y => y <= year).pop() || YEARS[0];
             const nextYear = YEARS.find(y => y > year) || YEARS[YEARS.length - 1];
@@ -920,7 +1088,7 @@ export default function ElectionVisualizer() {
 
             const prevLayout = getLayoutForYear(prevYear, scatterCache, calculateScatterLayout);
             const nextLayout = getLayoutForYear(nextYear, scatterCache, calculateScatterLayout);
-            
+
             if (prevLayout && nextLayout && prevYear !== nextYear) {
                 setLayoutPositions(interpolateLayoutPositions(prevLayout, nextLayout, ratio));
             } else if (prevLayout) {
@@ -943,7 +1111,7 @@ export default function ElectionVisualizer() {
         } else {
             setLayoutPositions(null);
         }
-    }, [layoutMode, year, mapPaths, electionData, calculateLayout, calculateGridLayout, calculateScatterLayout, interpolateLayoutPositions]);
+    }, [layoutMode, year, mapPaths, electionData, calculateLayout, calculateGridLayout, calculateScatterLayout, interpolateLayoutPositions, isGeneratingScatter]);
 
     // Background Calculation Effect using Web Workers
     useEffect(() => {
@@ -1072,11 +1240,21 @@ export default function ElectionVisualizer() {
         };
     }, [layoutMode, mapPaths, electionData]); // Updated dependency to layoutMode
 
+    // Pre-compute party RGB values for gradient mode (avoid d3.rgb calls per-county per-frame)
+    const partyRgbs = useMemo(() => {
+        if (!window.d3) return null;
+        return {
+            dem: window.d3.rgb(isDarkMode ? PARTIES.DEM.darkColor : PARTIES.DEM.color),
+            rep: window.d3.rgb(isDarkMode ? PARTIES.REP.darkColor : PARTIES.REP.color),
+            third: window.d3.rgb(isDarkMode ? PARTIES.THIRD.darkColor : PARTIES.THIRD.color),
+            center: window.d3.rgb('#800080'),
+        };
+    }, [isDarkMode, d3Status]);
+
     const getColor = useCallback((fips) => {
         const data = getInterpolatedData(fips, year);
         if (!data) return isDarkMode ? '#1e293b' : '#e5e7eb';
 
-        // Calculate three-way vote shares (normalized to sum to 1)
         const dem = data.demVotes || 0;
         const rep = data.repVotes || 0;
         const third = data.thirdVotes || 0;
@@ -1084,13 +1262,11 @@ export default function ElectionVisualizer() {
 
         if (total === 0) return isDarkMode ? '#1e293b' : '#e5e7eb';
 
-        // Normalized shares (barycentric coordinates)
         const demWeight = dem / total;
         const repWeight = rep / total;
         const thirdWeight = third / total;
 
         if (mode === 'winner') {
-            // Winner-take-all: show color of party with most votes
             if (demWeight > repWeight && demWeight > thirdWeight) {
                 return isDarkMode ? PARTIES.DEM.darkColor : PARTIES.DEM.color;
             } else if (repWeight > demWeight && repWeight > thirdWeight) {
@@ -1098,46 +1274,31 @@ export default function ElectionVisualizer() {
             } else if (thirdWeight > demWeight && thirdWeight > repWeight) {
                 return isDarkMode ? PARTIES.THIRD.darkColor : PARTIES.THIRD.color;
             }
-            // Tie-breaker: Dem > Rep > Third
             return demWeight >= repWeight
                 ? (isDarkMode ? PARTIES.DEM.darkColor : PARTIES.DEM.color)
                 : (isDarkMode ? PARTIES.REP.darkColor : PARTIES.REP.color);
         } else {
-            // Ternary gradient using barycentric interpolation with purple center
-            if (window.d3) {
-                // For balanced votes (near center), blend towards purple
-                const centerColor = '#800080'; // Purple
-
-                // Calculate distance from center (equal thirds)
+            if (partyRgbs) {
                 const centerDistance = Math.abs(demWeight - 0.333) + Math.abs(repWeight - 0.333) + Math.abs(thirdWeight - 0.333);
-                const centerWeight = Math.max(0, 1 - (centerDistance * 1.5)); // Stronger near center
+                const centerWeight = Math.max(0, 1 - (centerDistance * 1.5));
 
-                // Convert hex colors to RGB
-                const demRgb = window.d3.rgb(isDarkMode ? PARTIES.DEM.darkColor : PARTIES.DEM.color);
-                const repRgb = window.d3.rgb(isDarkMode ? PARTIES.REP.darkColor : PARTIES.REP.color);
-                const thirdRgb = window.d3.rgb(isDarkMode ? PARTIES.THIRD.darkColor : PARTIES.THIRD.color);
-                const centerRgb = window.d3.rgb(centerColor);
+                let r = partyRgbs.dem.r * demWeight + partyRgbs.rep.r * repWeight + partyRgbs.third.r * thirdWeight;
+                let g = partyRgbs.dem.g * demWeight + partyRgbs.rep.g * repWeight + partyRgbs.third.g * thirdWeight;
+                let b = partyRgbs.dem.b * demWeight + partyRgbs.rep.b * repWeight + partyRgbs.third.b * thirdWeight;
 
-                // Weighted average of RGB components
-                let r = demRgb.r * demWeight + repRgb.r * repWeight + thirdRgb.r * thirdWeight;
-                let g = demRgb.g * demWeight + repRgb.g * repWeight + thirdRgb.g * thirdWeight;
-                let b = demRgb.b * demWeight + repRgb.b * repWeight + thirdRgb.b * thirdWeight;
-
-                // Blend with purple at center
                 if (centerWeight > 0) {
-                    r = r * (1 - centerWeight) + centerRgb.r * centerWeight;
-                    g = g * (1 - centerWeight) + centerRgb.g * centerWeight;
-                    b = b * (1 - centerWeight) + centerRgb.b * centerWeight;
+                    r = r * (1 - centerWeight) + partyRgbs.center.r * centerWeight;
+                    g = g * (1 - centerWeight) + partyRgbs.center.g * centerWeight;
+                    b = b * (1 - centerWeight) + partyRgbs.center.b * centerWeight;
                 }
 
                 return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
             }
-            // Fallback
             return demWeight > repWeight
                 ? (isDarkMode ? PARTIES.DEM.darkColor : PARTIES.DEM.color)
                 : (isDarkMode ? PARTIES.REP.darkColor : PARTIES.REP.color);
         }
-    }, [getInterpolatedData, year, mode, isDarkMode]);
+    }, [getInterpolatedData, year, mode, isDarkMode, partyRgbs]);
 
     // Non-passive wheel listener for global scroll blocking and zooming
     useEffect(() => {
@@ -1219,15 +1380,11 @@ export default function ElectionVisualizer() {
     const handleMouseMove = useCallback((e, feature) => {
         if (!electionData || !svgRef.current || !feature) return;
 
-        // Use Centroid of the feature for stable tooltip positioning regardless of zoom
         const pathItem = mapPaths?.find(p => p.id === feature.id);
         if (!pathItem) return;
 
         let mx = pathItem.centroid[0];
         let my = pathItem.centroid[1];
-
-        // Check if we are in Layout Mode (Circle) AND have a cached position for this year
-        const nearestYear = YEARS.reduce((prev, curr) => Math.abs(curr - year) < Math.abs(prev - year) ? curr : prev);
 
         if (layoutMode !== LAYOUTS.GEO && layoutPositions && layoutPositions[feature.id]) {
             const pos = layoutPositions[feature.id];
@@ -1241,7 +1398,7 @@ export default function ElectionVisualizer() {
             mx,
             my
         });
-    }, [electionData, mapPaths, layoutMode, layoutPositions, year]);
+    }, [electionData, mapPaths, layoutMode, layoutPositions]);
 
     // Touch / Pinch-to-Zoom Handlers
     const handleTouchStart = (e) => {
@@ -1338,6 +1495,9 @@ export default function ElectionVisualizer() {
                             onMouseLeave={() => setHovered(null)}
                         />
                     );
+                } else if (layoutMode === LAYOUTS.SCATTER) {
+                    // In scatter mode, if county is filtered out, don't render anything
+                    return null;
                 }
             }
 
@@ -1452,7 +1612,6 @@ export default function ElectionVisualizer() {
         </div>
     );
 
-
     if (d3Status !== 'ready' || topoStatus !== 'ready' || dataStatus === 'loading') {
         return (
             <div className={`flex h-screen w-full items-center justify-center font-sans ${isDarkMode ? 'bg-slate-950 text-slate-400' : 'bg-slate-50 text-slate-500'}`}>
@@ -1463,6 +1622,119 @@ export default function ElectionVisualizer() {
             </div>
         );
     }
+
+    // --- Vertical Range Slider Component ---
+    const VerticalRangeSlider = ({ min, max, value, onChange, isDarkMode }) => {
+        const [isDragging, setIsDragging] = useState(null);
+        const [localValue, setLocalValue] = useState(value);
+        const sliderRef = useRef(null);
+
+        // Sync local value with prop value when not dragging
+        useEffect(() => {
+            if (!isDragging) {
+                setLocalValue(value);
+            }
+        }, [value, isDragging]);
+
+        const toPct = (val) => {
+            const minL = Math.log(Math.max(1, min));
+            const maxL = Math.log(Math.max(1, max));
+            const valL = Math.log(Math.max(1, val));
+            return Math.max(0, Math.min(100, ((valL - minL) / (maxL - minL)) * 100));
+        };
+
+        const fromPct = (pct) => {
+            const minL = Math.log(Math.max(1, min));
+            const maxL = Math.log(Math.max(1, max));
+            const valL = minL + (pct / 100) * (maxL - minL);
+            return Math.round(Math.exp(valL));
+        };
+
+        const handlePointerDown = (e, type) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsDragging(type);
+            e.target.setPointerCapture(e.pointerId);
+        };
+
+        const handlePointerMove = (e) => {
+            if (!isDragging || !sliderRef.current) return;
+            e.preventDefault();
+            e.stopPropagation();
+
+            const rect = sliderRef.current.getBoundingClientRect();
+            const relativeY = e.clientY - rect.top;
+            const pct = Math.max(0, Math.min(100, (1 - relativeY / rect.height) * 100));
+
+            const newVal = fromPct(pct);
+
+            let nextVal = [...localValue];
+            if (isDragging === 'min') {
+                const safeVal = Math.min(newVal, localValue[1] - 1000);
+                nextVal = [Math.max(min, safeVal), localValue[1]];
+            } else {
+                const safeVal = Math.max(newVal, localValue[0] + 1000);
+                nextVal = [localValue[0], Math.min(max, safeVal)];
+            }
+
+            // Only update local state, DO NOT trigger parent callback yet
+            setLocalValue(nextVal);
+        };
+
+        const handlePointerUp = (e) => {
+            // Trigger parent update on release
+            onChange(localValue);
+            setIsDragging(null);
+            e.target.releasePointerCapture(e.pointerId);
+        };
+
+        return (
+            <div className={`relative h-[200px] w-12 flex flex-col items-center select-none touch-none bg-transparent`}>
+                <div className={`text-[10px] font-bold mb-2 ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>POP</div>
+                <div
+                    ref={sliderRef}
+                    className={`relative w-1.5 flex-1 rounded-full ${isDarkMode ? 'bg-slate-700' : 'bg-slate-300'}`}
+                >
+                    {/* Active Track */}
+                    <div
+                        className="absolute w-full bg-blue-500 rounded-full opacity-60"
+                        style={{
+                            bottom: `${toPct(localValue[0])}%`,
+                            height: `${toPct(localValue[1]) - toPct(localValue[0])}%`
+                        }}
+                    ></div>
+
+                    {/* Min Handle */}
+                    <div
+                        className={`absolute left-1/2 -ml-2.5 w-5 h-5 rounded-full shadow-md border cursor-pointer hover:scale-110 transition-transform ${isDragging === 'min' ? 'scale-110 z-20 ring-2 ring-blue-400' : 'z-10'} ${isDarkMode ? 'bg-slate-800 border-slate-600' : 'bg-white border-slate-300'}`}
+                        style={{ bottom: `calc(${toPct(localValue[0])}% - 10px)` }}
+                        onPointerDown={(e) => handlePointerDown(e, 'min')}
+                        onPointerMove={handlePointerMove}
+                        onPointerUp={handlePointerUp}
+                    >
+                        {/* Min Label */}
+                        <div className={`absolute right-7 top-1/2 -mt-2 text-[10px] font-mono whitespace-nowrap px-1 py-0.5 rounded shadow-sm bg-opacity-90 ${isDarkMode ? 'bg-slate-800 text-slate-300' : 'bg-white text-slate-600'}`}>
+                            {localValue[0] >= 1000000 ? `${(localValue[0] / 1000000).toFixed(1)}M` : localValue[0] >= 1000 ? `${(localValue[0] / 1000).toFixed(0)}k` : localValue[0]}
+                        </div>
+                    </div>
+
+                    {/* Max Handle */}
+                    <div
+                        className={`absolute left-1/2 -ml-2.5 w-5 h-5 rounded-full shadow-md border cursor-pointer hover:scale-110 transition-transform ${isDragging === 'max' ? 'scale-110 z-20 ring-2 ring-blue-400' : 'z-10'} ${isDarkMode ? 'bg-slate-800 border-slate-600' : 'bg-white border-slate-300'}`}
+                        style={{ bottom: `calc(${toPct(localValue[1])}% - 10px)` }}
+                        onPointerDown={(e) => handlePointerDown(e, 'max')}
+                        onPointerMove={handlePointerMove}
+                        onPointerUp={handlePointerUp}
+                    >
+                        {/* Max Label */}
+                        <div className={`absolute right-7 top-1/2 -mt-2 text-[10px] font-mono whitespace-nowrap px-1 py-0.5 rounded shadow-sm bg-opacity-90 ${isDarkMode ? 'bg-slate-800 text-slate-300' : 'bg-white text-slate-600'}`}>
+                            {localValue[1] >= 1000000 ? `${(localValue[1] / 1000000).toFixed(1)}M` : localValue[1] >= 1000 ? `${(localValue[1] / 1000).toFixed(0)}k` : localValue[1]}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    };
 
     return (
         <div className={`h-screen w-full font-sans relative overflow-hidden flex flex-col transition-colors duration-300 ${isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'}`}>
@@ -1766,7 +2038,20 @@ export default function ElectionVisualizer() {
                         <span className="hidden md:inline">{showBorders ? 'Hide Borders' : 'See Borders'}</span>
                     </button>
                 </div>
-            </div >
+
+                {/* Vertical Slider Stack (Spectrum Only) */}
+                {layoutMode === LAYOUTS.SCATTER && (
+                    <div className="pointer-events-auto flex flex-col gap-2 shrink-0 md:w-32 items-center md:items-end">
+                        <VerticalRangeSlider
+                            min={0}
+                            max={globalMaxVotes}
+                            value={uiPopRange}
+                            onChange={handlePopSliderChange}
+                            isDarkMode={isDarkMode}
+                        />
+                    </div>
+                )}
+            </div>
 
 
 
@@ -1939,9 +2224,9 @@ export default function ElectionVisualizer() {
             })()
             }
 
-            {/* Blocking Cache Generation Overlay */}
+            {/* Blocking Cache Generation Overlay (Cartogram OR Scatter) */}
             {
-                cacheProgress.count < cacheProgress.total && layoutMode === LAYOUTS.CARTOGRAM && (
+                ((cacheProgress.count < cacheProgress.total && layoutMode === LAYOUTS.CARTOGRAM) || isGeneratingScatter) && (
                     <div className="absolute inset-0 z-[100] bg-slate-900/80 backdrop-blur-sm flex flex-col items-center justify-center text-white pointer-events-auto cursor-wait">
                         <div className="bg-slate-800 p-8 rounded-2xl shadow-2xl border border-slate-700 max-w-md w-full text-center">
                             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-6"></div>
@@ -1949,10 +2234,14 @@ export default function ElectionVisualizer() {
                             <p className="text-slate-400 text-sm mb-6">Optimizing complex geometry for smooth interactions...</p>
 
                             <div className="text-4xl font-bold text-blue-400 mb-2">
-                                {Math.round((cacheProgress.count / cacheProgress.total) * 100)}%
+                                {isGeneratingScatter
+                                    ? (scatterProgress.total > 0 ? Math.round((scatterProgress.count / scatterProgress.total) * 100) : 0)
+                                    : (cacheProgress.total > 0 ? Math.round((cacheProgress.count / cacheProgress.total) * 100) : 0)}%
                             </div>
                             <div className="text-xs text-slate-500 font-mono">
-                                {cacheProgress.count} / {cacheProgress.total} elections
+                                {isGeneratingScatter
+                                    ? `${scatterProgress.count} / ${scatterProgress.total} years`
+                                    : `${cacheProgress.count} / ${cacheProgress.total} elections`}
                             </div>
                         </div>
                     </div>
