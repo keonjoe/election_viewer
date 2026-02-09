@@ -390,6 +390,7 @@ export default function ElectionVisualizer() {
     const [hovered, setHovered] = useState(null);
     const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
     const [showBorders, setShowBorders] = useState(false);
+    const [isScrubbing, setIsScrubbing] = useState(false);
 
     const [isMobile, setIsMobile] = useState(false);
 
@@ -870,45 +871,79 @@ export default function ElectionVisualizer() {
         return positions;
     }, [mapPaths, electionData]);
 
+    // Helper: Interpolate layout positions between two years
+    const interpolateLayoutPositions = useCallback((prevYearPos, nextYearPos, ratio) => {
+        if (!prevYearPos || !nextYearPos) return prevYearPos || nextYearPos;
+        
+        const interpolated = {};
+        const allIds = new Set([...Object.keys(prevYearPos), ...Object.keys(nextYearPos)]);
+        
+        for (const id of allIds) {
+            const prev = prevYearPos[id];
+            const next = nextYearPos[id];
+            
+            if (prev && next) {
+                interpolated[id] = {
+                    x: prev.x + (next.x - prev.x) * ratio,
+                    y: prev.y + (next.y - prev.y) * ratio,
+                    r: prev.r + (next.r - prev.r) * ratio
+                };
+            } else {
+                interpolated[id] = prev || next;
+            }
+        }
+        
+        return interpolated;
+    }, []);
 
-    // Layout Calculation Effect
+    // Layout Calculation Effect with Interpolation (for scatter and grid modes)
     useEffect(() => {
-        const nearestYear = YEARS.reduce((prev, curr) => Math.abs(curr - year) < Math.abs(prev - year) ? curr : prev);
-
-        if (layoutMode === LAYOUTS.CARTOGRAM) {
-            if (cartogramCache.current[nearestYear]) {
-                setLayoutPositions(cartogramCache.current[nearestYear]);
-            } else if (window.d3 && mapPaths && electionData[nearestYear]) {
-                const layout = calculateLayout(nearestYear);
+        const getLayoutForYear = (targetYear, cacheRef, calculateFunc) => {
+            if (cacheRef.current[targetYear]) {
+                return cacheRef.current[targetYear];
+            } else if (mapPaths && electionData[targetYear]) {
+                const layout = calculateFunc(targetYear);
                 if (layout) {
-                    cartogramCache.current[nearestYear] = layout;
-                    setLayoutPositions(layout);
+                    cacheRef.current[targetYear] = layout;
+                    return layout;
                 }
+            }
+            return null;
+        };
+
+        // Interpolate for scatter mode only, use nearest year for cartogram and grid
+        if (layoutMode === LAYOUTS.SCATTER) {
+            // Interpolate between election years for smooth animation
+            const prevYear = YEARS.filter(y => y <= year).pop() || YEARS[0];
+            const nextYear = YEARS.find(y => y > year) || YEARS[YEARS.length - 1];
+            const ratio = prevYear === nextYear ? 0 : (year - prevYear) / (nextYear - prevYear);
+
+            const prevLayout = getLayoutForYear(prevYear, scatterCache, calculateScatterLayout);
+            const nextLayout = getLayoutForYear(nextYear, scatterCache, calculateScatterLayout);
+            
+            if (prevLayout && nextLayout && prevYear !== nextYear) {
+                setLayoutPositions(interpolateLayoutPositions(prevLayout, nextLayout, ratio));
+            } else if (prevLayout) {
+                setLayoutPositions(prevLayout);
             }
         } else if (layoutMode === LAYOUTS.GRID) {
-            if (gridCache.current[nearestYear]) {
-                setLayoutPositions(gridCache.current[nearestYear]);
-            } else if (mapPaths && electionData[nearestYear]) {
-                const layout = calculateGridLayout(nearestYear);
-                if (layout) {
-                    gridCache.current[nearestYear] = layout;
-                    setLayoutPositions(layout);
-                }
+            // Use nearest year (no interpolation)
+            const nearestYear = YEARS.reduce((prev, curr) => Math.abs(curr - year) < Math.abs(prev - year) ? curr : prev);
+            const layout = getLayoutForYear(nearestYear, gridCache, calculateGridLayout);
+            if (layout) {
+                setLayoutPositions(layout);
             }
-        } else if (layoutMode === LAYOUTS.SCATTER) {
-            if (scatterCache.current[nearestYear]) {
-                setLayoutPositions(scatterCache.current[nearestYear]);
-            } else if (mapPaths && electionData[nearestYear]) {
-                const layout = calculateScatterLayout(nearestYear);
-                if (layout) {
-                    scatterCache.current[nearestYear] = layout;
-                    setLayoutPositions(layout);
-                }
+        } else if (layoutMode === LAYOUTS.CARTOGRAM) {
+            // Use nearest year (no interpolation)
+            const nearestYear = YEARS.reduce((prev, curr) => Math.abs(curr - year) < Math.abs(prev - year) ? curr : prev);
+            const layout = getLayoutForYear(nearestYear, cartogramCache, calculateLayout);
+            if (layout) {
+                setLayoutPositions(layout);
             }
         } else {
             setLayoutPositions(null);
         }
-    }, [layoutMode, year, mapPaths, electionData, calculateLayout, calculateGridLayout, calculateScatterLayout]);
+    }, [layoutMode, year, mapPaths, electionData, calculateLayout, calculateGridLayout, calculateScatterLayout, interpolateLayoutPositions]);
 
     // Background Calculation Effect using Web Workers
     useEffect(() => {
@@ -1281,16 +1316,24 @@ export default function ElectionVisualizer() {
                 if (positions && positions[pathItem.id]) {
                     const pos = positions[pathItem.id];
                     const strokeWidth = showBorders ? (0.5 / pos.r) : 0;
+                    // Apply transition animation to scatter mode only when idle (not playing or scrubbing)
+                    // During playback and scrubbing, disable transitions for better performance
+                    let transitionClass = "transition-colors duration-200";
+                    if (layoutMode === LAYOUTS.SCATTER) {
+                        transitionClass = (isPlaying || isScrubbing) ? "circle-playing" : "circle-transition";
+                    }
+                    // Reduce precision during playback/scrubbing for better performance
+                    const precision = (isPlaying || isScrubbing) && layoutMode === LAYOUTS.SCATTER ? 0 : 2;
                     return (
                         <circle
                             key={pathItem.id}
-                            cx={pos.x.toFixed(2)}
-                            cy={pos.y.toFixed(2)}
-                            r={pos.r.toFixed(2)}
+                            cx={pos.x.toFixed(precision)}
+                            cy={pos.y.toFixed(precision)}
+                            r={pos.r.toFixed(precision)}
                             fill={getColor(pathItem.id)}
                             stroke={showBorders ? (isDarkMode ? "#334155" : "#cbd5e1") : "none"}
                             strokeWidth={strokeWidth}
-                            className="hover:opacity-90 transition-colors duration-200"
+                            className={`hover:opacity-90 ${transitionClass}`}
                             onMouseEnter={(e) => handleMouseMove(e, pathItem.feature)}
                             onMouseLeave={() => setHovered(null)}
                         />
@@ -1311,7 +1354,7 @@ export default function ElectionVisualizer() {
                 />
             );
         });
-    }, [mapPaths, layoutMode, layoutPositions, showBorders, isDarkMode, getColor, handleMouseMove, year]);
+    }, [mapPaths, layoutMode, layoutPositions, showBorders, isDarkMode, getColor, handleMouseMove, year, isPlaying, isScrubbing]);
 
     // --- Render ---
 
@@ -1367,7 +1410,9 @@ export default function ElectionVisualizer() {
                 step="0.1" // Allow smooth sliding
                 disabled={Object.keys(electionData).length === 0}
                 value={year}
+                onPointerDown={() => setIsScrubbing(true)}
                 onPointerUp={() => {
+                    setIsScrubbing(false);
                     // Snap on drag end
                     const nearest = YEARS.reduce((prev, curr) => Math.abs(curr - year) < Math.abs(prev - year) ? curr : prev);
                     setYear(nearest);
@@ -1442,6 +1487,65 @@ export default function ElectionVisualizer() {
                     >
                         <g style={{ transform: `translate(${viewState.x}px, ${viewState.y}px) scale(${viewState.k})`, transformOrigin: '0 0' }}>
                             {mapContent}
+
+                            {/* Spectrum Axis and Indicators */}
+                            {layoutMode === LAYOUTS.SCATTER && (() => {
+                                const PADDING_X = 50;
+                                const CENTER_Y = height / 2;
+                                const axisWidth = width - 2 * PADDING_X;
+                                const indicators = [
+                                    { label: 'D', position: 0, color: isDarkMode ? PARTIES.DEM.darkColor : PARTIES.DEM.color },
+                                    { label: '', position: 0.25, color: isDarkMode ? '#64748b' : '#94a3b8' },
+                                    { label: '', position: 0.5, color: isDarkMode ? '#64748b' : '#94a3b8' },
+                                    { label: '', position: 0.75, color: isDarkMode ? '#64748b' : '#94a3b8' },
+                                    { label: 'R', position: 1, color: isDarkMode ? PARTIES.REP.darkColor : PARTIES.REP.color }
+                                ];
+
+                                return (
+                                    <g className="pointer-events-none">
+                                        {/* Horizontal axis line */}
+                                        <line
+                                            x1={PADDING_X}
+                                            y1={CENTER_Y}
+                                            x2={PADDING_X + axisWidth}
+                                            y2={CENTER_Y}
+                                            stroke={isDarkMode ? '#475569' : '#cbd5e1'}
+                                            strokeWidth={2}
+                                            strokeOpacity={0.6}
+                                        />
+                                        {/* Tick marks and labels */}
+                                        {indicators.map((ind, i) => {
+                                            const x = PADDING_X + ind.position * axisWidth;
+                                            return (
+                                                <g key={i}>
+                                                    {/* Tick mark */}
+                                                    <line
+                                                        x1={x}
+                                                        y1={CENTER_Y - 8}
+                                                        x2={x}
+                                                        y2={CENTER_Y + 8}
+                                                        stroke={ind.color}
+                                                        strokeWidth={ind.position === 0 || ind.position === 1 ? 3 : 2}
+                                                        strokeOpacity={0.8}
+                                                    />
+                                                    {/* Label */}
+                                                    <text
+                                                        x={x}
+                                                        y={CENTER_Y + 25}
+                                                        textAnchor="middle"
+                                                        fill={ind.color}
+                                                        fontSize="14"
+                                                        fontWeight={ind.position === 0 || ind.position === 1 ? 'bold' : 'normal'}
+                                                        opacity={0.9}
+                                                    >
+                                                        {ind.label}
+                                                    </text>
+                                                </g>
+                                            );
+                                        })}
+                                    </g>
+                                );
+                            })()}
 
                             {/* State Borders */}
                             {layoutMode === LAYOUTS.GEO && (
