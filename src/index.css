@@ -5,18 +5,27 @@
 @layer base {
   :root {
     color-scheme: light dark;
+    forced-color-adjust: none;
+    -webkit-forced-color-adjust: none;
+  }
+
+  /* Prevent Chrome #enable-force-dark from inverting SVG fills and UI elements */
+  svg,
+  svg * {
+    forced-color-adjust: none;
+    -webkit-forced-color-adjust: none;
   }
 }
 
 @layer utilities {
   .circle-transition {
     transition: cx 0.6s cubic-bezier(0.4, 0, 0.2, 1),
-                cy 0.6s cubic-bezier(0.4, 0, 0.2, 1),
-                r 0.6s cubic-bezier(0.4, 0, 0.2, 1),
-                fill 0.6s cubic-bezier(0.4, 0, 0.2, 1),
-                opacity 0.2s ease-in-out;
+      cy 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+      r 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+      fill 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+      opacity 0.2s ease-in-out;
   }
-  
+
   .circle-playing {
     transition: none;
     will-change: cx, cy, r, fill;

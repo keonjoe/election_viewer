@@ -127,9 +127,9 @@ const TriangleLegend = ({ isDarkMode, mode }) => {
         // Define triangle points and center (scaled by 2 for high-DPI)
         const scale = 2;
         const points = [
-            { x: 50 * scale, y: 22 * scale, color: isDarkMode ? PARTIES.THIRD.darkColor : PARTIES.THIRD.color },
-            { x: 90 * scale, y: 92 * scale, color: isDarkMode ? PARTIES.REP.darkColor : PARTIES.REP.color },
-            { x: 10 * scale, y: 92 * scale, color: isDarkMode ? PARTIES.DEM.darkColor : PARTIES.DEM.color },
+            { x: 50 * scale, y: 22 * scale, color: PARTIES.THIRD.color },
+            { x: 90 * scale, y: 92 * scale, color: PARTIES.REP.color },
+            { x: 10 * scale, y: 92 * scale, color: PARTIES.DEM.color },
             { x: 50 * scale, y: 65 * scale, color: '#800080' },
         ];
 
@@ -1244,12 +1244,12 @@ export default function ElectionVisualizer() {
     const partyRgbs = useMemo(() => {
         if (!window.d3) return null;
         return {
-            dem: window.d3.rgb(isDarkMode ? PARTIES.DEM.darkColor : PARTIES.DEM.color),
-            rep: window.d3.rgb(isDarkMode ? PARTIES.REP.darkColor : PARTIES.REP.color),
-            third: window.d3.rgb(isDarkMode ? PARTIES.THIRD.darkColor : PARTIES.THIRD.color),
+            dem: window.d3.rgb(PARTIES.DEM.color),
+            rep: window.d3.rgb(PARTIES.REP.color),
+            third: window.d3.rgb(PARTIES.THIRD.color),
             center: window.d3.rgb('#800080'),
         };
-    }, [isDarkMode, d3Status]);
+    }, [d3Status]);
 
     const getColor = useCallback((fips) => {
         const data = getInterpolatedData(fips, year);
@@ -1268,15 +1268,15 @@ export default function ElectionVisualizer() {
 
         if (mode === 'winner') {
             if (demWeight > repWeight && demWeight > thirdWeight) {
-                return isDarkMode ? PARTIES.DEM.darkColor : PARTIES.DEM.color;
+                return PARTIES.DEM.color;
             } else if (repWeight > demWeight && repWeight > thirdWeight) {
-                return isDarkMode ? PARTIES.REP.darkColor : PARTIES.REP.color;
+                return PARTIES.REP.color;
             } else if (thirdWeight > demWeight && thirdWeight > repWeight) {
-                return isDarkMode ? PARTIES.THIRD.darkColor : PARTIES.THIRD.color;
+                return PARTIES.THIRD.color;
             }
             return demWeight >= repWeight
-                ? (isDarkMode ? PARTIES.DEM.darkColor : PARTIES.DEM.color)
-                : (isDarkMode ? PARTIES.REP.darkColor : PARTIES.REP.color);
+                ? PARTIES.DEM.color
+                : PARTIES.REP.color;
         } else {
             if (partyRgbs) {
                 const centerDistance = Math.abs(demWeight - 0.333) + Math.abs(repWeight - 0.333) + Math.abs(thirdWeight - 0.333);
@@ -1295,10 +1295,10 @@ export default function ElectionVisualizer() {
                 return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
             }
             return demWeight > repWeight
-                ? (isDarkMode ? PARTIES.DEM.darkColor : PARTIES.DEM.color)
-                : (isDarkMode ? PARTIES.REP.darkColor : PARTIES.REP.color);
+                ? PARTIES.DEM.color
+                : PARTIES.REP.color;
         }
-    }, [getInterpolatedData, year, mode, isDarkMode, partyRgbs]);
+    }, [getInterpolatedData, year, mode, partyRgbs]);
 
     // Non-passive wheel listener for global scroll blocking and zooming
     useEffect(() => {
@@ -1624,7 +1624,7 @@ export default function ElectionVisualizer() {
     }
 
     // --- Vertical Range Slider Component ---
-    const VerticalRangeSlider = ({ min, max, value, onChange, isDarkMode }) => {
+    const VerticalRangeSlider = ({ min, max, value, onChange, isDarkMode, height = 200 }) => {
         const [isDragging, setIsDragging] = useState(null);
         const [localValue, setLocalValue] = useState(value);
         const sliderRef = useRef(null);
@@ -1689,7 +1689,7 @@ export default function ElectionVisualizer() {
         };
 
         return (
-            <div className={`relative h-[200px] w-12 flex flex-col items-center select-none touch-none bg-transparent`}>
+            <div className="relative w-12 flex flex-col items-center select-none touch-none bg-transparent" style={{ height: `${height}px` }}>
                 <div className={`text-[10px] font-bold mb-2 ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>POP</div>
                 <div
                     ref={sliderRef}
@@ -1736,6 +1736,116 @@ export default function ElectionVisualizer() {
         );
     };
 
+    // --- Horizontal Range Slider Component (for mobile spectrum mode) ---
+    const HorizontalRangeSlider = ({ min, max, value, onChange, isDarkMode }) => {
+        const [isDragging, setIsDragging] = useState(null);
+        const [localValue, setLocalValue] = useState(value);
+        const sliderRef = useRef(null);
+
+        useEffect(() => {
+            if (!isDragging) {
+                setLocalValue(value);
+            }
+        }, [value, isDragging]);
+
+        const toPct = (val) => {
+            const minL = Math.log(Math.max(1, min));
+            const maxL = Math.log(Math.max(1, max));
+            const valL = Math.log(Math.max(1, val));
+            return Math.max(0, Math.min(100, ((valL - minL) / (maxL - minL)) * 100));
+        };
+
+        const fromPct = (pct) => {
+            const minL = Math.log(Math.max(1, min));
+            const maxL = Math.log(Math.max(1, max));
+            const valL = minL + (pct / 100) * (maxL - minL);
+            return Math.round(Math.exp(valL));
+        };
+
+        const handlePointerDown = (e, type) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsDragging(type);
+            e.target.setPointerCapture(e.pointerId);
+        };
+
+        const handlePointerMove = (e) => {
+            if (!isDragging || !sliderRef.current) return;
+            e.preventDefault();
+            e.stopPropagation();
+
+            const rect = sliderRef.current.getBoundingClientRect();
+            const relativeX = e.clientX - rect.left;
+            const pct = Math.max(0, Math.min(100, (relativeX / rect.width) * 100));
+
+            const newVal = fromPct(pct);
+
+            let nextVal = [...localValue];
+            if (isDragging === 'min') {
+                const safeVal = Math.min(newVal, localValue[1] - 1000);
+                nextVal = [Math.max(min, safeVal), localValue[1]];
+            } else {
+                const safeVal = Math.max(newVal, localValue[0] + 1000);
+                nextVal = [localValue[0], Math.min(max, safeVal)];
+            }
+
+            setLocalValue(nextVal);
+        };
+
+        const handlePointerUp = (e) => {
+            onChange(localValue);
+            setIsDragging(null);
+            e.target.releasePointerCapture(e.pointerId);
+        };
+
+        const formatVal = (v) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v;
+
+        return (
+            <div className="relative w-full flex items-center gap-2 select-none touch-none bg-transparent">
+                <div className={`text-[10px] font-bold shrink-0 ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>POP</div>
+                <div
+                    ref={sliderRef}
+                    className={`relative h-1.5 flex-1 rounded-full ${isDarkMode ? 'bg-slate-700' : 'bg-slate-300'}`}
+                >
+                    {/* Active Track */}
+                    <div
+                        className="absolute h-full bg-blue-500 rounded-full opacity-60"
+                        style={{
+                            left: `${toPct(localValue[0])}%`,
+                            width: `${toPct(localValue[1]) - toPct(localValue[0])}%`
+                        }}
+                    ></div>
+
+                    {/* Min Handle */}
+                    <div
+                        className={`absolute top-1/2 -mt-2.5 -ml-2.5 w-5 h-5 rounded-full shadow-md border cursor-pointer hover:scale-110 transition-transform ${isDragging === 'min' ? 'scale-110 z-20 ring-2 ring-blue-400' : 'z-10'} ${isDarkMode ? 'bg-slate-800 border-slate-600' : 'bg-white border-slate-300'}`}
+                        style={{ left: `${toPct(localValue[0])}%` }}
+                        onPointerDown={(e) => handlePointerDown(e, 'min')}
+                        onPointerMove={handlePointerMove}
+                        onPointerUp={handlePointerUp}
+                    >
+                        <div className={`absolute bottom-7 left-1/2 -ml-4 text-[10px] font-mono whitespace-nowrap px-1 py-0.5 rounded shadow-sm bg-opacity-90 ${isDarkMode ? 'bg-slate-800 text-slate-300' : 'bg-white text-slate-600'}`}>
+                            {formatVal(localValue[0])}
+                        </div>
+                    </div>
+
+                    {/* Max Handle */}
+                    <div
+                        className={`absolute top-1/2 -mt-2.5 -ml-2.5 w-5 h-5 rounded-full shadow-md border cursor-pointer hover:scale-110 transition-transform ${isDragging === 'max' ? 'scale-110 z-20 ring-2 ring-blue-400' : 'z-10'} ${isDarkMode ? 'bg-slate-800 border-slate-600' : 'bg-white border-slate-300'}`}
+                        style={{ left: `${toPct(localValue[1])}%` }}
+                        onPointerDown={(e) => handlePointerDown(e, 'max')}
+                        onPointerMove={handlePointerMove}
+                        onPointerUp={handlePointerUp}
+                    >
+                        <div className={`absolute bottom-7 left-1/2 -ml-4 text-[10px] font-mono whitespace-nowrap px-1 py-0.5 rounded shadow-sm bg-opacity-90 ${isDarkMode ? 'bg-slate-800 text-slate-300' : 'bg-white text-slate-600'}`}>
+                            {formatVal(localValue[1])}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
     return (
         <div className={`h-screen w-full font-sans relative overflow-hidden flex flex-col transition-colors duration-300 ${isDarkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'}`}>
 
@@ -1766,11 +1876,11 @@ export default function ElectionVisualizer() {
                                 const CENTER_Y = height / 2;
                                 const axisWidth = width - 2 * PADDING_X;
                                 const indicators = [
-                                    { label: 'D', position: 0, color: isDarkMode ? PARTIES.DEM.darkColor : PARTIES.DEM.color },
+                                    { label: 'D', position: 0, color: PARTIES.DEM.color },
                                     { label: '', position: 0.25, color: isDarkMode ? '#64748b' : '#94a3b8' },
                                     { label: '', position: 0.5, color: isDarkMode ? '#64748b' : '#94a3b8' },
                                     { label: '', position: 0.75, color: isDarkMode ? '#64748b' : '#94a3b8' },
-                                    { label: 'R', position: 1, color: isDarkMode ? PARTIES.REP.darkColor : PARTIES.REP.color }
+                                    { label: 'R', position: 1, color: PARTIES.REP.color }
                                 ];
 
                                 return (
@@ -1920,16 +2030,138 @@ export default function ElectionVisualizer() {
             </div>
 
             {/* 4. Controls & Legend */}
-            <div className="absolute z-10 pointer-events-none flex flex-row md:flex-col items-end gap-2 bottom-2 left-4 right-4 md:bottom-auto md:left-auto md:top-6 md:right-6 origin-bottom-left md:origin-top-right scale-90 md:scale-100 flex-wrap overflow-visible pr-2 md:pr-0">
-                {/* Header Group (Legend + Link) */}
-                <div className="flex flex-row items-end md:items-start gap-2 shrink-0">
-                    {/* Legend - Order 1 Mobile, Order 2 Desktop */}
-                    <div className={`order-1 md:order-2 flex items-center gap-3 text-xs pointer-events-auto p-2 rounded-xl backdrop-blur-sm border shadow-sm shrink-0 md:w-32 md:justify-center ${isDarkMode ? 'bg-slate-900/50 border-slate-700 text-slate-300' : 'bg-white/50 border-slate-200 text-slate-600'}`}>
-                        <TriangleLegend isDarkMode={isDarkMode} mode={mode} />
-                    </div>
+            {isMobile ? (
+                /* ===== MOBILE LAYOUT ===== */
+                <div className="absolute z-10 pointer-events-none bottom-2 left-4 right-4 origin-bottom-left scale-90 overflow-visible">
+                    <div className="flex flex-row items-end gap-2">
+                        {/* Legend (triangle) */}
+                        <div className={`flex items-center gap-3 text-xs pointer-events-auto p-2 rounded-xl backdrop-blur-sm border shadow-sm shrink-0 ${isDarkMode ? 'bg-slate-900/50 border-slate-700 text-slate-300' : 'bg-white/50 border-slate-200 text-slate-600'}`}>
+                            <TriangleLegend isDarkMode={isDarkMode} mode={mode} />
+                        </div>
 
-                    {/* Color Mode Toggle - Order 2 Mobile, Order 1 Desktop */}
-                    <div className={`order-2 md:order-1 pointer-events-auto flex flex-col rounded-lg p-1 shadow-lg border shrink-0 ${isDarkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white/80 border-slate-200'}`}>
+                        {/* Mode Menu + Winner/Vote% (stacked, same width) */}
+                        <div className="pointer-events-auto flex flex-col gap-1.5 shrink-0">
+                            {/* View Mode Menu */}
+                            <div className="relative z-20">
+                                <button
+                                    onClick={() => setIsLayoutMenuOpen(!isLayoutMenuOpen)}
+                                    className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-md border w-full h-[40px] ${layoutMode !== LAYOUTS.GEO
+                                        ? (isDarkMode ? 'bg-indigo-900/80 border-indigo-500 text-indigo-300' : 'bg-indigo-50 border-indigo-200 text-indigo-600')
+                                        : (isDarkMode ? 'bg-slate-800/80 border-slate-700 text-slate-400 hover:bg-slate-800' : 'bg-white/80 border-slate-200 text-slate-500 hover:bg-white backdrop-blur-sm')
+                                        }`}
+                                >
+                                    <div className="flex items-center gap-2">
+                                        {layoutMode === LAYOUTS.GEO && <Globe size={16} />}
+                                        {layoutMode === LAYOUTS.CARTOGRAM && <Maximize2 size={16} />}
+                                        {layoutMode === LAYOUTS.GRID && <LayoutGrid size={16} />}
+                                        {layoutMode === LAYOUTS.SCATTER && <ScatterChart size={16} />}
+                                        <span>
+                                            {layoutMode === LAYOUTS.GEO ? 'Geo' : (layoutMode === LAYOUTS.CARTOGRAM ? 'Size' : (layoutMode === LAYOUTS.GRID ? 'Grid' : 'Axis'))}
+                                        </span>
+                                    </div>
+                                    {isLayoutMenuOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                                </button>
+
+                                {/* Dropdown Menu */}
+                                {isLayoutMenuOpen && (
+                                    <div className={`fixed bottom-[160px] left-4 right-4 z-[100] w-auto shadow-2xl touch-none rounded-xl border overflow-hidden backdrop-blur-md flex flex-col ${isDarkMode ? 'bg-slate-900/95 border-slate-700' : 'bg-white/95 border-slate-200'}`}>
+                                        {[
+                                            { id: LAYOUTS.GEO, label: 'Standard', icon: Globe, desc: 'Geographic Map' },
+                                            { id: LAYOUTS.CARTOGRAM, label: 'Size by Votes', icon: Maximize2, desc: 'Dorling Cartogram' },
+                                            { id: LAYOUTS.GRID, label: 'Sort by Votes', icon: LayoutGrid, desc: 'Sorted Grid' },
+                                            { id: LAYOUTS.SCATTER, label: 'Vote Spectrum', icon: ScatterChart, desc: 'Dem vs Rep Axis' }
+                                        ].map((opt) => (
+                                            <button
+                                                key={opt.id}
+                                                onClick={() => {
+                                                    setLayoutMode(opt.id);
+                                                    setIsLayoutMenuOpen(false);
+                                                }}
+                                                className={`flex items-center gap-3 px-4 py-3 text-left transition-colors ${layoutMode === opt.id
+                                                    ? (isDarkMode ? 'bg-indigo-900/50 text-indigo-300' : 'bg-indigo-50 text-indigo-600')
+                                                    : (isDarkMode ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-50')
+                                                    }`}
+                                            >
+                                                <opt.icon size={16} className={layoutMode === opt.id ? 'text-current' : (isDarkMode ? 'text-slate-500' : 'text-slate-400')} />
+                                                <div>
+                                                    <div className="text-xs font-bold">{opt.label}</div>
+                                                    <div className={`text-[10px] ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>{opt.desc}</div>
+                                                </div>
+                                                {layoutMode === opt.id && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-current"></div>}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Winner / Vote% Toggle */}
+                            <div className={`pointer-events-auto flex flex-col rounded-lg p-1 shadow-lg border shrink-0 ${isDarkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white/80 border-slate-200'}`}>
+                                <button
+                                    onClick={() => { setMode('winner'); setShowBorders(true); }}
+                                    className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-bold transition-all ${mode === 'winner'
+                                        ? (isDarkMode ? 'bg-blue-600 text-white shadow-md' : 'bg-blue-500 text-white shadow-md')
+                                        : (isDarkMode ? 'text-slate-400 hover:text-slate-200' : 'text-slate-600 hover:text-slate-900')
+                                        }`}
+                                >
+                                    <MapIcon size={14} />
+                                    <span>Winner</span>
+                                </button>
+                                <button
+                                    onClick={() => { setMode('gradient'); setShowBorders(false); }}
+                                    className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-bold transition-all ${mode === 'gradient'
+                                        ? (isDarkMode ? 'bg-purple-600 text-white shadow-md' : 'bg-purple-500 text-white shadow-md')
+                                        : (isDarkMode ? 'text-slate-400 hover:text-slate-200' : 'text-slate-600 hover:text-slate-900')
+                                        }`}
+                                >
+                                    <Layers size={14} />
+                                    <span>Vote %</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Dark Mode & Borders (stacked, next to Winner/Vote%) */}
+                        <div className="flex flex-col gap-1.5 pointer-events-auto shrink-0">
+                            <button
+                                onClick={() => setIsDarkMode(!isDarkMode)}
+                                className={`flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-md border ${isDarkMode
+                                    ? 'bg-slate-800 border-slate-600 text-yellow-400 hover:bg-slate-700'
+                                    : 'bg-white/80 border-slate-200 text-slate-500 hover:bg-white backdrop-blur-sm'
+                                    }`}
+                            >
+                                {isDarkMode ? <Sun size={14} /> : <Moon size={14} />}
+                            </button>
+
+                            <button
+                                onClick={() => setShowBorders(!showBorders)}
+                                className={`flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-md border ${showBorders
+                                    ? (isDarkMode ? 'bg-slate-800 border-slate-600 text-indigo-400 hover:bg-slate-700' : 'bg-white/80 border-slate-200 text-indigo-600 hover:bg-white backdrop-blur-sm')
+                                    : (isDarkMode ? 'bg-slate-800/80 border-slate-700 text-slate-400 hover:bg-slate-800' : 'bg-white/60 border-transparent text-slate-500 hover:bg-white backdrop-blur-sm')
+                                    }`}
+                            >
+                                {showBorders ? <Eye size={14} /> : <EyeOff size={14} />}
+                            </button>
+                        </div>
+
+                        {/* Vertical Population Slider (Spectrum Only) */}
+                        {layoutMode === LAYOUTS.SCATTER && (
+                            <div className="pointer-events-auto shrink-0 ml-auto mb-2">
+                                <VerticalRangeSlider
+                                    min={0}
+                                    max={globalMaxVotes}
+                                    value={uiPopRange}
+                                    onChange={handlePopSliderChange}
+                                    isDarkMode={isDarkMode}
+                                    height={170}
+                                />
+                            </div>
+                        )}
+                    </div>
+                </div>
+            ) : (
+                /* ===== DESKTOP LAYOUT ===== */
+                <div className="absolute z-10 pointer-events-none flex flex-col items-end gap-2 top-6 right-6 overflow-visible">
+                    {/* Color Mode Toggle */}
+                    <div className={`pointer-events-auto flex flex-col rounded-lg p-1 shadow-lg border shrink-0 w-32 ${isDarkMode ? 'bg-slate-800/90 border-slate-700' : 'bg-white/80 border-slate-200'}`}>
                         <button
                             onClick={() => { setMode('winner'); setShowBorders(true); }}
                             className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-bold transition-all ${mode === 'winner'
@@ -1951,107 +2183,106 @@ export default function ElectionVisualizer() {
                             <span>Vote %</span>
                         </button>
                     </div>
-                </div>
 
-                {/* View Mode Menu */}
-                <div className={`pointer-events-auto relative shrink-0 z-20 md:w-32`}>
-                    <button
-                        onClick={() => setIsLayoutMenuOpen(!isLayoutMenuOpen)}
-                        className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-md border w-full h-[40px] md:h-auto ${layoutMode !== LAYOUTS.GEO
-                            ? (isDarkMode ? 'bg-indigo-900/80 border-indigo-500 text-indigo-300' : 'bg-indigo-50 border-indigo-200 text-indigo-600')
-                            : (isDarkMode ? 'bg-slate-800/80 border-slate-700 text-slate-400 hover:bg-slate-800' : 'bg-white/80 border-slate-200 text-slate-500 hover:bg-white backdrop-blur-sm')
-                            }`}
-                    >
-                        <div className="flex items-center gap-2">
-                            {layoutMode === LAYOUTS.GEO && <Globe size={16} />}
-                            {layoutMode === LAYOUTS.CARTOGRAM && <Maximize2 size={16} />}
-                            {layoutMode === LAYOUTS.GRID && <LayoutGrid size={16} />}
-                            {layoutMode === LAYOUTS.SCATTER && <ScatterChart size={16} />}
+                    {/* Legend */}
+                    <div className={`flex items-center gap-3 text-xs pointer-events-auto p-2 rounded-xl backdrop-blur-sm border shadow-sm shrink-0 w-32 justify-center ${isDarkMode ? 'bg-slate-900/50 border-slate-700 text-slate-300' : 'bg-white/50 border-slate-200 text-slate-600'}`}>
+                        <TriangleLegend isDarkMode={isDarkMode} mode={mode} />
+                    </div>
 
-                            <span className="md:inline hidden">
-                                {layoutMode === LAYOUTS.GEO ? 'Geography' :
-                                    (layoutMode === LAYOUTS.CARTOGRAM ? 'Size by Votes' :
-                                        (layoutMode === LAYOUTS.GRID ? 'Arrange by Votes' : 'Vote Spectrum'))}
-                            </span>
-                            <span className="md:hidden inline">
-                                {layoutMode === LAYOUTS.GEO ? 'Geo' : (layoutMode === LAYOUTS.CARTOGRAM ? 'Size' : (layoutMode === LAYOUTS.GRID ? 'Grid' : 'Axis'))}
-                            </span>
-                        </div>
-                        {isLayoutMenuOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                    </button>
+                    {/* View Mode Menu */}
+                    <div className="pointer-events-auto relative shrink-0 z-20 w-32">
+                        <button
+                            onClick={() => setIsLayoutMenuOpen(!isLayoutMenuOpen)}
+                            className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-md border w-full ${layoutMode !== LAYOUTS.GEO
+                                ? (isDarkMode ? 'bg-indigo-900/80 border-indigo-500 text-indigo-300' : 'bg-indigo-50 border-indigo-200 text-indigo-600')
+                                : (isDarkMode ? 'bg-slate-800/80 border-slate-700 text-slate-400 hover:bg-slate-800' : 'bg-white/80 border-slate-200 text-slate-500 hover:bg-white backdrop-blur-sm')
+                                }`}
+                        >
+                            <div className="flex items-center gap-2">
+                                {layoutMode === LAYOUTS.GEO && <Globe size={16} />}
+                                {layoutMode === LAYOUTS.CARTOGRAM && <Maximize2 size={16} />}
+                                {layoutMode === LAYOUTS.GRID && <LayoutGrid size={16} />}
+                                {layoutMode === LAYOUTS.SCATTER && <ScatterChart size={16} />}
+                                <span>
+                                    {layoutMode === LAYOUTS.GEO ? 'Standard' :
+                                        (layoutMode === LAYOUTS.CARTOGRAM ? 'By Size' :
+                                            (layoutMode === LAYOUTS.GRID ? 'Grid' : 'Spectrum'))}
+                                </span>
+                            </div>
+                            {isLayoutMenuOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                        </button>
 
-                    {/* Dropdown Menu */}
-                    {isLayoutMenuOpen && (
-                        <div className={`${isMobile
-                            ? 'fixed bottom-[160px] left-4 right-4 z-[100] w-auto shadow-2xl touch-none'
-                            : 'absolute bottom-full left-0 mb-2 w-48 md:bottom-auto md:top-full md:mt-2 shadow-xl'} rounded-xl border overflow-hidden backdrop-blur-md flex flex-col ${isDarkMode ? 'bg-slate-900/95 border-slate-700' : 'bg-white/95 border-slate-200'}`}>
-                            {[
-                                { id: LAYOUTS.GEO, label: 'Geography', icon: Globe, desc: 'Standard Map' },
-                                { id: LAYOUTS.CARTOGRAM, label: 'Size by Votes', icon: Maximize2, desc: 'Dorling Cartogram' },
-                                { id: LAYOUTS.GRID, label: 'Arrange by Votes', icon: LayoutGrid, desc: 'Sorted Grid' },
-                                { id: LAYOUTS.SCATTER, label: 'Vote Spectrum', icon: ScatterChart, desc: 'Dem vs Rep Axis' }
-                            ].map((opt) => (
-                                <button
-                                    key={opt.id}
-                                    onClick={() => {
-                                        setLayoutMode(opt.id);
-                                        setIsLayoutMenuOpen(false);
-                                    }}
-                                    className={`flex items-center gap-3 px-4 py-3 text-left transition-colors ${layoutMode === opt.id
-                                        ? (isDarkMode ? 'bg-indigo-900/50 text-indigo-300' : 'bg-indigo-50 text-indigo-600')
-                                        : (isDarkMode ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-50')
-                                        }`}
-                                >
-                                    <opt.icon size={16} className={layoutMode === opt.id ? 'text-current' : (isDarkMode ? 'text-slate-500' : 'text-slate-400')} />
-                                    <div>
-                                        <div className="text-xs font-bold">{opt.label}</div>
-                                        <div className={`text-[10px] ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>{opt.desc}</div>
-                                    </div>
-                                    {layoutMode === opt.id && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-current"></div>}
-                                </button>
-                            ))}
+                        {/* Dropdown Menu */}
+                        {isLayoutMenuOpen && (
+                            <div className={`absolute top-full mt-2 w-48 shadow-xl rounded-xl border overflow-hidden backdrop-blur-md flex flex-col ${isDarkMode ? 'bg-slate-900/95 border-slate-700' : 'bg-white/95 border-slate-200'}`}>
+                                {[
+                                    { id: LAYOUTS.GEO, label: 'Standard', icon: Globe, desc: 'Geographic Map' },
+                                    { id: LAYOUTS.CARTOGRAM, label: 'Size by Votes', icon: Maximize2, desc: 'Dorling Cartogram' },
+                                    { id: LAYOUTS.GRID, label: 'Sort by Votes', icon: LayoutGrid, desc: 'Sorted Grid' },
+                                    { id: LAYOUTS.SCATTER, label: 'Vote Spectrum', icon: ScatterChart, desc: 'Dem vs Rep Axis' }
+                                ].map((opt) => (
+                                    <button
+                                        key={opt.id}
+                                        onClick={() => {
+                                            setLayoutMode(opt.id);
+                                            setIsLayoutMenuOpen(false);
+                                        }}
+                                        className={`flex items-center gap-3 px-4 py-3 text-left transition-colors ${layoutMode === opt.id
+                                            ? (isDarkMode ? 'bg-indigo-900/50 text-indigo-300' : 'bg-indigo-50 text-indigo-600')
+                                            : (isDarkMode ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-50')
+                                            }`}
+                                    >
+                                        <opt.icon size={16} className={layoutMode === opt.id ? 'text-current' : (isDarkMode ? 'text-slate-500' : 'text-slate-400')} />
+                                        <div>
+                                            <div className="text-xs font-bold">{opt.label}</div>
+                                            <div className={`text-[10px] ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>{opt.desc}</div>
+                                        </div>
+                                        {layoutMode === opt.id && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-current"></div>}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Dark Mode & Borders Stack */}
+                    <div className="flex flex-col gap-1.5 pointer-events-auto shrink-0 w-32">
+                        <button
+                            onClick={() => setIsDarkMode(!isDarkMode)}
+                            className={`flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-md border w-full ${isDarkMode
+                                ? 'bg-slate-800 border-slate-600 text-yellow-400 hover:bg-slate-700'
+                                : 'bg-white/80 border-slate-200 text-slate-500 hover:bg-white backdrop-blur-sm'
+                                }`}
+                        >
+                            {isDarkMode ? <Sun size={14} /> : <Moon size={14} />}
+                            <span>{isDarkMode ? 'Light Mode' : 'Dark Mode'}</span>
+                        </button>
+
+                        <button
+                            onClick={() => setShowBorders(!showBorders)}
+                            className={`flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-md border w-full ${showBorders
+                                ? (isDarkMode ? 'bg-slate-800 border-slate-600 text-indigo-400 hover:bg-slate-700' : 'bg-white/80 border-slate-200 text-indigo-600 hover:bg-white backdrop-blur-sm')
+                                : (isDarkMode ? 'bg-slate-800/80 border-slate-700 text-slate-400 hover:bg-slate-800' : 'bg-white/60 border-transparent text-slate-500 hover:bg-white backdrop-blur-sm')
+                                }`}
+                        >
+                            {showBorders ? <Eye size={14} /> : <EyeOff size={14} />}
+                            <span>{showBorders ? 'Hide Borders' : 'See Borders'}</span>
+                        </button>
+                    </div>
+
+                    {/* Vertical Slider Stack (Spectrum Only) */}
+                    {layoutMode === LAYOUTS.SCATTER && (
+                        <div className="pointer-events-auto flex flex-col gap-2 shrink-0 w-32 items-end">
+                            <VerticalRangeSlider
+                                min={0}
+                                max={globalMaxVotes}
+                                value={uiPopRange}
+                                onChange={handlePopSliderChange}
+                                isDarkMode={isDarkMode}
+                            />
                         </div>
                     )}
                 </div>
-
-                {/* Dark Mode & Borders Stack */}
-                <div className="flex flex-col gap-1.5 pointer-events-auto shrink-0 md:w-32">
-                    <button
-                        onClick={() => setIsDarkMode(!isDarkMode)}
-                        className={`flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-md border w-full ${isDarkMode
-                            ? 'bg-slate-800 border-slate-600 text-yellow-400 hover:bg-slate-700'
-                            : 'bg-white/80 border-slate-200 text-slate-500 hover:bg-white backdrop-blur-sm'
-                            }`}
-                    >
-                        {isDarkMode ? <Moon size={14} /> : <Sun size={14} />}
-                        <span className="hidden md:inline">{isDarkMode ? 'Dark Mode' : 'Light Mode'}</span>
-                    </button>
-
-                    <button
-                        onClick={() => setShowBorders(!showBorders)}
-                        className={`flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold transition-all shadow-md border w-full ${showBorders
-                            ? (isDarkMode ? 'bg-slate-800 border-slate-600 text-indigo-400 hover:bg-slate-700' : 'bg-white/80 border-slate-200 text-indigo-600 hover:bg-white backdrop-blur-sm')
-                            : (isDarkMode ? 'bg-slate-800/80 border-slate-700 text-slate-400 hover:bg-slate-800' : 'bg-white/60 border-transparent text-slate-500 hover:bg-white backdrop-blur-sm')
-                            }`}
-                    >
-                        {showBorders ? <Eye size={14} /> : <EyeOff size={14} />}
-                        <span className="hidden md:inline">{showBorders ? 'Hide Borders' : 'See Borders'}</span>
-                    </button>
-                </div>
-
-                {/* Vertical Slider Stack (Spectrum Only) */}
-                {layoutMode === LAYOUTS.SCATTER && (
-                    <div className="pointer-events-auto flex flex-col gap-2 shrink-0 md:w-32 items-center md:items-end">
-                        <VerticalRangeSlider
-                            min={0}
-                            max={globalMaxVotes}
-                            value={uiPopRange}
-                            onChange={handlePopSliderChange}
-                            isDarkMode={isDarkMode}
-                        />
-                    </div>
-                )}
-            </div>
+            )}
 
 
 
