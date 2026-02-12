@@ -403,6 +403,12 @@ export default function ElectionVisualizer() {
         window.addEventListener('resize', checkMobile);
         return () => window.removeEventListener('resize', checkMobile);
     }, []);
+
+    // Sync color-scheme with dark mode state to prevent Chrome #enable-force-dark
+    // from inverting colors. The 'only' keyword tells the browser it MUST NOT override.
+    useEffect(() => {
+        document.documentElement.style.colorScheme = isDarkMode ? 'only dark' : 'only light';
+    }, [isDarkMode]);
     const [layoutPositions, setLayoutPositions] = useState(null);
     const [viewState, setViewState] = useState({ k: 1, x: 0, y: 0 });
     const [isDragging, setIsDragging] = useState(false);
@@ -1866,6 +1872,7 @@ export default function ElectionVisualizer() {
                         ref={svgRef}
                         viewBox={`0 0 ${width} ${height}`}
                         className="w-full h-full max-h-screen max-w-none"
+                        style={{ colorScheme: isDarkMode ? 'only dark' : 'only light' }}
                     >
                         <g style={{ transform: `translate(${viewState.x}px, ${viewState.y}px) scale(${viewState.k})`, transformOrigin: '0 0' }}>
                             {mapContent}
@@ -2032,7 +2039,7 @@ export default function ElectionVisualizer() {
             {/* 4. Controls & Legend */}
             {isMobile ? (
                 /* ===== MOBILE LAYOUT ===== */
-                <div className="absolute z-10 pointer-events-none bottom-2 left-4 right-4 origin-bottom-left scale-90 overflow-visible">
+                <div className="absolute z-10 pointer-events-none left-4 right-4 origin-bottom-left scale-90 overflow-visible" style={{ bottom: 'calc(8px + env(safe-area-inset-bottom, 0px))' }}>
                     <div className="flex flex-row items-end gap-2">
                         {/* Legend (triangle) */}
                         <div className={`flex items-center gap-3 text-xs pointer-events-auto p-2 rounded-xl backdrop-blur-sm border shadow-sm shrink-0 ${isDarkMode ? 'bg-slate-900/50 border-slate-700 text-slate-300' : 'bg-white/50 border-slate-200 text-slate-600'}`}>
@@ -2064,7 +2071,7 @@ export default function ElectionVisualizer() {
 
                                 {/* Dropdown Menu */}
                                 {isLayoutMenuOpen && (
-                                    <div className={`fixed bottom-[160px] left-4 right-4 z-[100] w-auto shadow-2xl touch-none rounded-xl border overflow-hidden backdrop-blur-md flex flex-col ${isDarkMode ? 'bg-slate-900/95 border-slate-700' : 'bg-white/95 border-slate-200'}`}>
+                                    <div className={`fixed left-4 right-4 z-[100] w-auto shadow-2xl touch-none rounded-xl border overflow-hidden backdrop-blur-md flex flex-col ${isDarkMode ? 'bg-slate-900/95 border-slate-700' : 'bg-white/95 border-slate-200'}`} style={{ bottom: 'calc(160px + env(safe-area-inset-bottom, 0px))' }}>
                                         {[
                                             { id: LAYOUTS.GEO, label: 'Standard', icon: Globe, desc: 'Geographic Map' },
                                             { id: LAYOUTS.CARTOGRAM, label: 'Size by Votes', icon: Maximize2, desc: 'Dorling Cartogram' },
@@ -2144,7 +2151,7 @@ export default function ElectionVisualizer() {
 
                         {/* Vertical Population Slider (Spectrum Only) */}
                         {layoutMode === LAYOUTS.SCATTER && (
-                            <div className="pointer-events-auto shrink-0 ml-auto mb-2">
+                            <div className="pointer-events-auto shrink-0 ml-auto mb-4">
                                 <VerticalRangeSlider
                                     min={0}
                                     max={globalMaxVotes}

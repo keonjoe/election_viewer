@@ -4,16 +4,22 @@
 
 @layer base {
   :root {
-    color-scheme: light dark;
-    forced-color-adjust: none;
-    -webkit-forced-color-adjust: none;
+    /* Default fallback; overridden dynamically by JS based on isDarkMode.
+       The 'only' keyword tells the browser it MUST NOT override colors. */
+    color-scheme: only light;
   }
 
-  /* Prevent Chrome #enable-force-dark from inverting SVG fills and UI elements */
+  /* Support viewport-fit=cover on devices with system bars / notches */
+  body {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* Prevent Chrome #enable-force-dark from inverting SVG fill colors.
+     The 'only' keyword ensures the browser cannot override the color scheme
+     on these elements, preserving the carefully computed election result colors. */
   svg,
   svg * {
-    forced-color-adjust: none;
-    -webkit-forced-color-adjust: none;
+    color-scheme: only light;
   }
 }
 
